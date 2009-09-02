@@ -1,7 +1,6 @@
 package com.andrewshu.android.redditdonation;
 
 import java.io.BufferedReader;
-import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -157,7 +156,7 @@ public final class PickSubredditActivity extends ListActivity {
                 if (entity != null) {
 	                try {
 	                	entity.consumeContent();
-	                } catch (IOException e2) {
+	                } catch (Exception e2) {
 	                	// Ignore.
 	                }
                 }
@@ -175,7 +174,9 @@ public final class PickSubredditActivity extends ListActivity {
     		dismissDialog(Constants.DIALOG_LOADING_REDDITS_LIST);
 			List<String> items;
     		if (reddits == null || reddits.size() == 0) {
-    	        items = Arrays.asList(SUBREDDITS_MINUS_FRONTPAGE);
+    			// Need to make a copy because Arrays.asList returns List backed by original array
+    	        items = new ArrayList<String>();
+    			items.addAll(Arrays.asList(SUBREDDITS_MINUS_FRONTPAGE));
     		} else {
     			items = reddits;
     		}
