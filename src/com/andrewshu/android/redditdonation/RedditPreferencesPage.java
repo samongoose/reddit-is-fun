@@ -1,4 +1,4 @@
-package com.andrewshu.android.reddit;
+package com.andrewshu.android.redditdonation;
 
 import android.app.AlarmManager;
 import android.app.NotificationManager;

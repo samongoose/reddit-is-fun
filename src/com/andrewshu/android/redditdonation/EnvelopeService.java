@@ -1,4 +1,4 @@
-package com.andrewshu.android.reddit;
+package com.andrewshu.android.redditdonation;
 
 import org.apache.http.impl.client.DefaultHttpClient;
 

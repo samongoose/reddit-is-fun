@@ -1,4 +1,4 @@
-package com.andrewshu.android.reddit;
+package com.andrewshu.android.redditdonation;
 
 import java.io.BufferedReader;
 import java.io.IOException;

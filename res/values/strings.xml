@@ -2,7 +2,7 @@
 
 <resources>
 
-    <string name="app_name">reddit is fun</string>
+    <string name="app_name">reddit is fun donation</string>
     
     <string name="noThreads">No threads here</string>
     <string name="noComments">No comments here</string>
