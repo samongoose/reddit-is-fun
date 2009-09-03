@@ -77,7 +77,7 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
  * @author TalkLittle
  *
  */
-public final class RedditCommentsListActivity extends ListActivity
+public class RedditCommentsListActivity extends ListActivity
 		implements View.OnCreateContextMenuListener {
 
 	private static final String TAG = "RedditCommentsListActivity";
@@ -87,20 +87,21 @@ public final class RedditCommentsListActivity extends ListActivity
     private HashSet<Integer> mMorePositions = new HashSet<Integer>(); 
 	
     /** Custom list adapter that fits our threads data into the list. */
-    private CommentsListAdapter mCommentsAdapter;
+    protected CommentsListAdapter mCommentsAdapter;
     
-    private final DefaultHttpClient mClient = Common.createGzipHttpClient();
+    protected final DefaultHttpClient mClient = Common.createGzipHttpClient();
     volatile private String mModhash;
    
     
     // Common settings are stored here
-    private final RedditSettings mSettings = new RedditSettings();
+    protected final RedditSettings mSettings = new RedditSettings();
     
-    private ThreadInfo mOpThreadInfo;
-    private CharSequence mThreadTitle = null;
-    private int mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
-    private CharSequence mSortByUrl = Constants.CommentsSort.SORT_BY_HOT_URL;
-    private CharSequence mJumpToCommentId = null;
+    protected ThreadInfo mOpThreadInfo;
+    protected CharSequence mThreadTitle = null;
+    protected int mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
+    protected CharSequence mSortByUrl = Constants.CommentsSort.SORT_BY_HOT_URL;
+    protected int mJumpToCommentPosition = 0;
+    protected CharSequence mJumpToCommentId = null;
     
     // Keep track of the row ids of comments that user has hidden
     private HashSet<Integer> mHiddenCommentHeads = new HashSet<Integer>();
@@ -108,14 +109,14 @@ public final class RedditCommentsListActivity extends ListActivity
     private HashSet<Integer> mHiddenComments = new HashSet<Integer>();
 
     // UI State
-    private View mVoteTargetView = null;
-    private CommentInfo mVoteTargetCommentInfo = null;
+    protected View mVoteTargetView = null;
+    protected CommentInfo mVoteTargetCommentInfo = null;
     private URLSpan[] mVoteTargetSpans = null;
     
     // ProgressDialogs with percentage bars
     private AutoResetProgressDialog mLoadingCommentsProgress;
     
-    private boolean mCanChord = false;
+    protected boolean mCanChord = false;
     
     /**
      * Called when the activity starts up. Do activity initialization
@@ -138,42 +139,44 @@ public final class RedditCommentsListActivity extends ListActivity
         
         // Pull current subreddit and thread info from Intent
         Bundle extras = getIntent().getExtras();
-        if (extras != null) {
-        	String commentContext = extras.getString(Constants.EXTRA_COMMENT_CONTEXT);
-        	if (commentContext != null) {
-        		Matcher commentContextMatcher = Constants.COMMENT_CONTEXT_PATTERN.matcher(commentContext);
-        		if (commentContextMatcher.find()) {
-            		mSettings.setSubreddit(commentContextMatcher.group(2));
-        			mSettings.setThreadId(commentContextMatcher.group(3));
-        			mJumpToCommentId = commentContextMatcher.group(4);
-        		} else {
-        			// Quit, because the Comments List requires subreddit and thread id from Intent.
-                	Log.e(TAG, "Quitting because of bad comment context.");
-                	finish();
-        		}
-        	} else {
-	        	mSettings.setThreadId(extras.getString(ThreadInfo.ID));
-	        	mSettings.setSubreddit(extras.getString(ThreadInfo.SUBREDDIT));
-	        	mThreadTitle = extras.getString(ThreadInfo.TITLE);
-	        	setTitle(mThreadTitle + " : " + mSettings.subreddit);
-	        	int numComments = extras.getInt(ThreadInfo.NUM_COMMENTS);
-	        	// TODO: Take into account very negative karma comments
-	        	if (numComments < Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT)
-	        		mNumVisibleComments = numComments;
-	        	else
-	        		mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
-        	}
-        } else {
+        if (extras == null) {
         	// Quit, because the Comments List requires subreddit and thread id from Intent.
         	Log.e(TAG, "Quitting because no subreddit and thread id data was passed into the Intent.");
         	finish();
         }
+    	String commentContext = extras.getString(Constants.EXTRA_COMMENT_CONTEXT);
+    	if (commentContext != null) {
+    		Matcher commentContextMatcher = Constants.COMMENT_CONTEXT_PATTERN.matcher(commentContext);
+    		if (commentContextMatcher.find()) {
+        		mSettings.setSubreddit(commentContextMatcher.group(2));
+    			mSettings.setThreadId(commentContextMatcher.group(3));
+    			mJumpToCommentId = commentContextMatcher.group(4);
+    		} else {
+    			// Quit, because the Comments List requires subreddit and thread id from Intent.
+            	Log.e(TAG, "Quitting because of bad comment context.");
+            	finish();
+    		}
+    	} else {
+        	mSettings.setThreadId(extras.getString(ThreadInfo.ID));
+        	mSettings.setSubreddit(extras.getString(ThreadInfo.SUBREDDIT));
+        	mThreadTitle = extras.getString(ThreadInfo.TITLE);
+        	setTitle(mThreadTitle + " : " + mSettings.subreddit);
+        	int numComments = extras.getInt(ThreadInfo.NUM_COMMENTS);
+        	// TODO: Take into account very negative karma comments
+        	if (numComments < Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT)
+        		mNumVisibleComments = numComments;
+        	else
+        		mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
+    	}
+    	mJumpToCommentPosition = extras.getInt(Constants.JUMP_TO_COMMENT_POSITION_KEY);
+    	boolean isSubclass = extras.getBoolean(Constants.IS_SUBCLASS_KEY);
         
         if (savedInstanceState != null) {
         	mSortByUrl = savedInstanceState.getCharSequence(Constants.CommentsSort.SORT_BY_KEY);
         }
         
-        new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
+        if (!isSubclass)
+        	new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
     }
     
     @Override
@@ -194,6 +197,12 @@ public final class RedditCommentsListActivity extends ListActivity
     		new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
     	}
     	new Common.PeekEnvelopeTask(this, mClient, mSettings.mailNotificationStyle).execute();
+    	
+    	// comments list stuff
+    	if (mJumpToCommentPosition != 0) {
+    		getListView().setSelectionFromTop(mJumpToCommentPosition, 10);
+    		mJumpToCommentPosition = 0;
+    	}
     }
     
     @Override
@@ -540,16 +549,20 @@ public final class RedditCommentsListActivity extends ListActivity
         // Mark the OP post/regular comment as selected
         mVoteTargetCommentInfo = item;
         mVoteTargetView = v;
-        String thingFullname;
-    	if (mVoteTargetCommentInfo.getOP() != null)
-    		thingFullname = mVoteTargetCommentInfo.getOP().getName();
-    	else
-    		thingFullname = mVoteTargetCommentInfo.getName();
-		
-        if (mMorePositions.contains(position))
-        	doLoadMoreComments(position, thingFullname, mSettings.subreddit);
-        else
+        
+        if (mMorePositions.contains(position)) {
+        	mJumpToCommentPosition = position;
+        	Intent moreChildrenIntent = new Intent(this, MoreChildrenActivity.class);
+        	moreChildrenIntent.putExtra(ThreadInfo.SUBREDDIT, mOpThreadInfo.getSubreddit());
+        	moreChildrenIntent.putExtra(ThreadInfo.ID, mOpThreadInfo.getId());
+        	moreChildrenIntent.putExtra(ThreadInfo.TITLE, mOpThreadInfo.getTitle());
+        	moreChildrenIntent.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mOpThreadInfo.getNumComments()));
+        	moreChildrenIntent.putExtra(CommentInfo.NAME, item.getName());
+        	moreChildrenIntent.putExtra(Constants.IS_SUBCLASS_KEY, true);
+			startActivity(moreChildrenIntent);
+        } else {
         	showDialog(Constants.DIALOG_THING_CLICK);
+        }
     }
 
     /**
@@ -572,7 +585,7 @@ public final class RedditCommentsListActivity extends ListActivity
      * Task takes in a subreddit name string and thread id, downloads its data, parses
      * out the comments, and communicates them back to the UI as they are read.
      */
-    private class DownloadCommentsTask extends AsyncTask<Integer, Integer, Void> {
+    class DownloadCommentsTask extends AsyncTask<Integer, Integer, Void> {
     	
     	private TreeMap<Integer, CommentInfo> mCommentsMap = new TreeMap<Integer, CommentInfo>();
     	private int _mNumComments = mNumVisibleComments;
@@ -903,10 +916,12 @@ public final class RedditCommentsListActivity extends ListActivity
     		}
     		mCommentsAdapter.mIsLoading = false;
     		mCommentsAdapter.notifyDataSetChanged();
-    		if (mJumpToCommentId != null) {
+			if (mJumpToCommentPosition != 0) {
+				getListView().setSelectionFromTop(mJumpToCommentPosition, 10);
+			} else if (mJumpToCommentId != null) {
     			for (int k = 0; k < mCommentsAdapter.getCount(); k++) {
     				if (mJumpToCommentId.equals(mCommentsAdapter.getItem(k).getId())) {
-    					getListView().setSelection(k);
+    					getListView().setSelectionFromTop(k, 10);
     					mJumpToCommentId = null;
     					break;
     				}
@@ -1374,14 +1389,6 @@ public final class RedditCommentsListActivity extends ListActivity
     	}
     }
 
-        
-
-    public boolean doLoadMoreComments(int position, CharSequence thingId, CharSequence subreddit) {
-    	// TODO: download, parse, insert the results. use Tamper Data Firefox extension (view source)
-    	Toast.makeText(this, "Sorry, load more comments not implemented yet. Open in browser for now.", Toast.LENGTH_LONG).show();
-    	return false;
-    }
-
     /**
      * Populates the menu.
      */
@@ -1522,12 +1529,17 @@ public final class RedditCommentsListActivity extends ListActivity
     	AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
     	int rowId = (int) info.id;
     	
-    	if (rowId == 0 || mMorePositions.contains(rowId))
+    	if (rowId == 0) {
     		;
-    	else if (mHiddenCommentHeads.contains(rowId))
-    		menu.add(0, Constants.DIALOG_SHOW_COMMENT, 0, "Show comment");
-    	else
-    		menu.add(0, Constants.DIALOG_HIDE_COMMENT, 0, "Hide comment");
+    	} else if (mMorePositions.contains(rowId)) {
+    		menu.add(0, Constants.DIALOG_GOTO_PARENT, Menu.NONE, "Go to parent");
+    	} else if (mHiddenCommentHeads.contains(rowId)) {
+    		menu.add(0, Constants.DIALOG_SHOW_COMMENT, Menu.NONE, "Show comment");
+    		menu.add(0, Constants.DIALOG_GOTO_PARENT, Menu.NONE, "Go to parent");
+    	} else {
+    		menu.add(0, Constants.DIALOG_HIDE_COMMENT, Menu.NONE, "Hide comment");
+    		menu.add(0, Constants.DIALOG_GOTO_PARENT, Menu.NONE, "Go to parent");
+    	}
     }
     
     @Override
@@ -1541,6 +1553,14 @@ public final class RedditCommentsListActivity extends ListActivity
     		return true;
     	case Constants.DIALOG_SHOW_COMMENT:
     		showComment(rowId);
+    		return true;
+    	case Constants.DIALOG_GOTO_PARENT:
+    		int myIndent = mCommentsAdapter.getItem(rowId).getIndent();
+    		int parentRowId;
+    		for (parentRowId = rowId - 1; parentRowId >= 0; parentRowId--)
+    			if (mCommentsAdapter.getItem(parentRowId).getIndent() < myIndent)
+    				break;
+    		getListView().setSelectionFromTop(parentRowId, 10);
     		return true;
 		default:
     		return super.onContextItemSelected(item);	
@@ -1911,6 +1931,7 @@ public final class RedditCommentsListActivity extends ListActivity
     protected void onSaveInstanceState(Bundle state) {
     	super.onSaveInstanceState(state);
     	state.putCharSequence(Constants.CommentsSort.SORT_BY_KEY, mSortByUrl);
+    	state.putInt(Constants.JUMP_TO_COMMENT_POSITION_KEY, mJumpToCommentPosition);
     }
     
     /**
