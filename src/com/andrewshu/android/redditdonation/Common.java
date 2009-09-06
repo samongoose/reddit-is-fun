@@ -47,6 +47,10 @@ import org.apache.http.params.HttpConnectionParams;
 import org.apache.http.params.HttpParams;
 import org.apache.http.protocol.HTTP;
 import org.apache.http.protocol.HttpContext;
+import org.codehaus.jackson.JsonFactory;
+import org.codehaus.jackson.JsonParseException;
+import org.codehaus.jackson.JsonParser;
+import org.codehaus.jackson.JsonToken;
 
 import android.app.Activity;
 import android.app.ListActivity;
@@ -307,99 +311,105 @@ public class Common {
     	}
     }
     
-    static class PeekEnvelopeTask extends AsyncTask<Void, Void, Boolean> {
+    static class PeekEnvelopeTask extends AsyncTask<Void, Void, Integer> {
     	private Context mContext;
     	private DefaultHttpClient mClient;
     	private String mMailNotificationStyle;
+    	private final JsonFactory jsonFactory = new JsonFactory();
+    	
     	public PeekEnvelopeTask(Context context, DefaultHttpClient client, String mailNotificationStyle) {
     		mContext = context;
     		mClient = client;
     		mMailNotificationStyle = mailNotificationStyle;
     	}
     	@Override
-    	public Boolean doInBackground(Void... voidz) {
+    	public Integer doInBackground(Void... voidz) {
+    		HttpEntity entity = null;
     		try {
     			if (Constants.PREF_MAIL_NOTIFICATION_STYLE_OFF.equals(mMailNotificationStyle))
-    	    		return false;
-    	    	return Common.doPeekEnvelope(mClient, null);
-    		} catch (Exception e) {
-    			return null;
-    		}
+    	    		return 0;
+    			HttpGet request = new HttpGet("http://www.reddit.com/message/inbox/.json?mark=false");
+	        	HttpResponse response = mClient.execute(request);
+	        	entity = response.getEntity();
+	        	
+	        	InputStream in = entity.getContent();
+	            
+	        	Integer count = processInboxJSON(in);
+	            
+	            in.close();
+	            entity.consumeContent();
+	            
+	            return count;
+	            
+	        } catch (Exception e) {
+	            Log.e(TAG, "failed:" + e.getMessage());
+	            if (entity != null) {
+	            	try {
+	            		entity.consumeContent();
+	            	} catch (Exception e2) {
+	            		// Ignore.
+	            	}
+	            }
+	        }
+	        return null;
     	}
     	@Override
-    	public void onPostExecute(Boolean hasMail) {
-    		// hasMail == null means error. Don't do anything.
-    		if (hasMail == null)
+    	public void onPostExecute(Integer count) {
+    		// null means error. Don't do anything.
+    		if (count == null)
     			return;
-    		if (hasMail) {
-    			Common.newMailNotification(mContext, mMailNotificationStyle);
+    		if (count > 0) {
+    			Common.newMailNotification(mContext, mMailNotificationStyle, count);
     		} else {
     			Common.cancelMailNotification(mContext);
     		}
     	}
+    	
+    	/**
+    	 * Gets the author, title, body of the first inbox entry.
+    	 */
+    	private Integer processInboxJSON(InputStream in)
+				throws IOException, JsonParseException, IllegalStateException {
+			String genericListingError = "Not a valid listing";
+			Integer count = 0;
+			
+			JsonParser jp = jsonFactory.createJsonParser(in);
+			
+			/* The comments JSON file is a JSON array with 2 elements. First element is a thread JSON object,
+			 * equivalent to the thread object you get from a subreddit .json file.
+			 * Second element is a similar JSON object, but the "children" array is an array of comments
+			 * instead of threads. 
+			 */
+			if (jp.nextToken() != JsonToken.START_OBJECT)
+				throw new IllegalStateException("Non-JSON-object in inbox (not logged in?)");
+			
+			while (!Constants.JSON_CHILDREN.equals(jp.getCurrentName())) {
+				// Don't care
+				jp.nextToken();
+			}
+			jp.nextToken();
+			if (jp.getCurrentToken() != JsonToken.START_ARRAY)
+				throw new IllegalStateException(genericListingError);
+			
+			while (jp.nextToken() != JsonToken.END_ARRAY) {
+				if (JsonToken.FIELD_NAME != jp.getCurrentToken())
+					continue;
+				String namefield = jp.getCurrentName();
+				// Should validate each field but I'm lazy
+				jp.nextToken(); // move to value
+				if (Constants.JSON_NEW.equals(namefield)) {
+					if (Constants.TRUE_STRING.equals(jp.getText()))
+						count++;
+					else
+						// Stop parsing on first old message
+						break;
+				}
+			}
+			// Finished parsing first child
+			return count;
+		}
     }
-    /**
-     * Check mail. You should use PeekEnvelopeTask instead.
-     * 
-     * @param client
-     * @param shortcutHtml The HTML for the page to bypass network
-     * @return
-     */
-    static boolean doPeekEnvelope(DefaultHttpClient client, String shortcutHtml) throws Exception {
-    	String no;
-    	String line;
-    	HttpEntity entity = null;
-    	try {
-    		if (shortcutHtml == null) {
-	    		HttpGet httpget = new HttpGet(Constants.MODHASH_URL);
-	    		HttpResponse response = client.execute(httpget);
-	    		
-	        	entity = response.getEntity();
-	
-	        	BufferedReader in = new BufferedReader(new InputStreamReader(entity.getContent()));
-	        	line = in.readLine();
-	        	in.close();
-	        	entity.consumeContent();
-    		} else {
-    			line = shortcutHtml;
-    		}
-        	
-        	if (line == null || Constants.EMPTY_STRING.equals(line)) {
-        		throw new HttpException("No content returned from doPeekEnvelope GET to "+Constants.MODHASH_URL);
-        	}
-        	if (line.contains("USER_REQUIRED")) {
-        		throw new Exception("User session error: USER_REQUIRED");
-        	}
-        	
-        	Matcher haveMailMatcher = Constants.HAVE_MAIL_PATTERN.matcher(line);
-        	if (haveMailMatcher.find()) {
-        		no = haveMailMatcher.group(1);
-        		if (Constants.NO_STRING.equals(no)) {
-        			// No mail.
-        			return false;
-        		}
-        	} else {
-        		throw new Exception("No envelope found at URL "+Constants.MODHASH_URL);
-        	}
-
-//        	// DEBUG
-//        	Log.dLong(TAG, line);
-
-        	return true;
-        	
-    	} catch (Exception e) {
-    		if (entity != null) {
-    			try {
-    				entity.consumeContent();
-    			} catch (Exception e2) {
-    				Log.e(TAG, e.getMessage());
-    			}
-    		}
-    		Log.e(TAG, e.getMessage());
-    		throw e;
-    	}
-    }
-    static void newMailNotification(Context context, String mailNotificationStyle) {
+    static void newMailNotification(Context context, String mailNotificationStyle, int count) {
     	Intent nIntent = new Intent(context, InboxActivity.class);
 		PendingIntent contentIntent = PendingIntent.getActivity(context, 0, nIntent, 0);
 		Notification notification = new Notification(R.drawable.mail, Constants.HAVE_MAIL_TICKER, System.currentTimeMillis());
@@ -407,7 +417,8 @@ public class Common {
 			RemoteViews contentView = new RemoteViews(context.getPackageName(), R.layout.big_envelope_notification);
 			notification.contentView = contentView;
 		} else {
-			notification.setLatestEventInfo(context, Constants.HAVE_MAIL_TITLE, Constants.HAVE_MAIL_TEXT, contentIntent);
+			notification.setLatestEventInfo(context, Constants.HAVE_MAIL_TITLE,
+					count + (count == 1 ? " unread message" : " unread messages"), contentIntent);
 		}
 		notification.defaults |= Notification.DEFAULT_SOUND;
 		notification.flags |= Notification.FLAG_ONLY_ALERT_ONCE | Notification.FLAG_AUTO_CANCEL;
