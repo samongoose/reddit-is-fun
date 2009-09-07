@@ -393,6 +393,7 @@ public final class InboxActivity extends ListActivity
 			mMessagesAdapter.mIsLoading = false;
 			mMessagesAdapter.notifyDataSetChanged();
 			dismissDialog(Constants.DIALOG_LOADING_INBOX);
+			Common.cancelMailNotification(InboxActivity.this.getApplicationContext());
     	}
     }
     
@@ -798,8 +799,13 @@ public final class InboxActivity extends ListActivity
     		final Button replyCancelButton = (Button) dialog.findViewById(R.id.reply_cancel_button);
     		replySaveButton.setOnClickListener(new OnClickListener() {
     			public void onClick(View v) {
-    				new MessageReplyTask(mVoteTargetMessageInfo.getName(), mVoteTargetMessageInfo).execute(replyBody.getText());
-    				dismissDialog(Constants.DIALOG_REPLY);
+    				if(mVoteTargetMessageInfo != null){
+        				new MessageReplyTask(mVoteTargetMessageInfo.getName(), mVoteTargetMessageInfo).execute(replyBody.getText());
+        				dismissDialog(Constants.DIALOG_REPLY);
+    				}
+    				else{
+    					Common.showErrorToast("Error replying. Please try again.", Toast.LENGTH_SHORT, InboxActivity.this);
+    				}
     			}
     		});
     		replyCancelButton.setOnClickListener(new OnClickListener() {
