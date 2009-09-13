@@ -95,6 +95,9 @@ public class Constants {
     
     // Special CSS for webviews to match themes
     static final String CSS_DARK = "<style>body{color:#c0c0c0;background-color:#191919}a:link{color:#ffffff}</style>";
+
+    // Colors for markdown
+    static final int MARKDOWN_LINK_COLOR = 0xff2288cc;
     
     // States for StateListDrawables
     static final int[] STATE_CHECKED = new int[]{android.R.attr.state_checked};
@@ -248,7 +251,7 @@ public class Constants {
     // Group 2: Captcha image absolute path
     static final Pattern CAPTCHA_IMAGE_PATTERN = Pattern.compile("<img class=\"capimage\"( alt=\".*?\")? src=\"(.+?)\"");
     // Group 1: inner
-    static final Pattern MY_SUBREDDITS_OUTER = Pattern.compile("your front page reddits.*?<ul>(.*?)</ul>");
+    static final Pattern MY_SUBREDDITS_OUTER = Pattern.compile("your front page reddits.*?<ul>(.*?)</ul>", Pattern.CASE_INSENSITIVE);
     // Group 3: subreddit name. Repeat the matcher.find() until it fails.
     static final Pattern MY_SUBREDDITS_INNER = Pattern.compile("<a(.*?)/r/(.*?)>(.+?)</a>");
 }
