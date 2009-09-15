@@ -28,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.http.HttpEntity;
@@ -102,6 +103,13 @@ public class RedditCommentsListActivity extends ListActivity
 
 	private static final String TAG = "RedditCommentsListActivity";
 	
+    // Group 1: fullname. Group 2: kind. Group 3: id36.
+    private final Pattern NEW_ID_PATTERN = Pattern.compile("\"id\": \"((.+?)_(.+?))\"");
+    // Group 2: subreddit name. Group 3: thread id36. Group 4: Comment id36.
+    private final Pattern COMMENT_CONTEXT_PATTERN = Pattern.compile("(http://www.reddit.com)?/r/(.+?)/comments/(.+?)/.+?/([a-zA-Z0-9]+)");
+    // Group 1: whole error. Group 2: the time part
+    private final Pattern RATELIMIT_RETRY_PATTERN = Pattern.compile("(you are trying to submit too fast. try again in (.+?)\\.)");
+
     private final JsonFactory jsonFactory = new JsonFactory();
     private final Markdown markdown = new Markdown();
     private int mNestedCommentsJSONOrder = 0;
@@ -110,7 +118,7 @@ public class RedditCommentsListActivity extends ListActivity
     /** Custom list adapter that fits our threads data into the list. */
     private CommentsListAdapter mCommentsAdapter;
     
-    private final DefaultHttpClient mClient = Common.createGzipHttpClient();
+    private final DefaultHttpClient mClient = Common.getGzipHttpClient();
     
     
     // Common settings are stored here
@@ -173,7 +181,7 @@ public class RedditCommentsListActivity extends ListActivity
     	// Comment context: a URL pointing directly at a comment, versus a thread
     	String commentContext = extras.getString(Constants.EXTRA_COMMENT_CONTEXT);
     	if (commentContext != null) {
-    		Matcher commentContextMatcher = Constants.COMMENT_CONTEXT_PATTERN.matcher(commentContext);
+    		Matcher commentContextMatcher = COMMENT_CONTEXT_PATTERN.matcher(commentContext);
     		if (commentContextMatcher.find()) {
         		mSettings.setSubreddit(commentContextMatcher.group(2));
     			mSettings.setThreadId(commentContextMatcher.group(3));
@@ -249,37 +257,6 @@ public class RedditCommentsListActivity extends ListActivity
     	Common.saveRedditPreferences(this, mSettings);
     }
     
-    public class VoteUpOnCheckedChangeListener implements CompoundButton.OnCheckedChangeListener {
-    	public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-	    	dismissDialog(Constants.DIALOG_THING_CLICK);
-	    	String thingFullname;
-	    	if (mVoteTargetCommentInfo.getOP() != null)
-	    		thingFullname = mVoteTargetCommentInfo.getOP().getName();
-	    	else
-	    		thingFullname = mVoteTargetCommentInfo.getName();
-			if (isChecked)
-				new VoteTask(thingFullname, 1).execute();
-			else
-				new VoteTask(thingFullname, 0).execute();
-		}
-    }
-    
-    public class VoteDownOnCheckedChangeListener implements CompoundButton.OnCheckedChangeListener {
-	    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-	    	dismissDialog(Constants.DIALOG_THING_CLICK);
-	    	String thingFullname;
-	    	if (mVoteTargetCommentInfo.getOP() != null)
-	    		thingFullname = mVoteTargetCommentInfo.getOP().getName();
-	    	else
-	    		thingFullname = mVoteTargetCommentInfo.getName();
-			if (isChecked)
-				new VoteTask(thingFullname, -1).execute();
-			else
-				new VoteTask(thingFullname, 0).execute();
-		}
-    }
-    
-
 
     private final class CommentsListAdapter extends ArrayAdapter<CommentInfo> {
     	static final int OP_ITEM_VIEW_TYPE = 0;
@@ -603,15 +580,17 @@ public class RedditCommentsListActivity extends ListActivity
 		
         if (mMorePositions.contains(position)) {
         	mJumpToCommentPosition = position;
-        	Intent moreChildrenIntent = new Intent(this, RedditCommentsListActivity.class);
+        	Intent moreChildrenIntent = new Intent(getApplicationContext(), RedditCommentsListActivity.class);
         	moreChildrenIntent.putExtra(ThreadInfo.SUBREDDIT, mOpThreadInfo.getSubreddit());
         	moreChildrenIntent.putExtra(ThreadInfo.ID, mOpThreadInfo.getId());
         	moreChildrenIntent.putExtra(ThreadInfo.TITLE, mOpThreadInfo.getTitle());
         	moreChildrenIntent.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mOpThreadInfo.getNumComments()));
         	moreChildrenIntent.putExtra(Constants.EXTRA_MORE_CHILDREN_ID, item.getId());
         	startActivity(moreChildrenIntent);
-        } else if (!"[deleted]".equals(item.getAuthor())) {
-        	showDialog(Constants.DIALOG_THING_CLICK);
+        } else {
+        	mJumpToCommentId = item.getId();
+        	if (!"[deleted]".equals(item.getAuthor()))
+        		showDialog(Constants.DIALOG_THING_CLICK);
         }
     }
 
@@ -1108,13 +1087,13 @@ public class RedditCommentsListActivity extends ListActivity
             	if (Constants.LOGGING) Common.logDLong(TAG, line);
 
             	String newId;
-            	Matcher idMatcher = Constants.NEW_ID_PATTERN.matcher(line);
+            	Matcher idMatcher = NEW_ID_PATTERN.matcher(line);
             	if (idMatcher.find()) {
             		newId = idMatcher.group(3);
             	} else {
             		if (line.contains("RATELIMIT")) {
                 		// Try to find the # of minutes using regex
-                    	Matcher rateMatcher = Constants.RATELIMIT_RETRY_PATTERN.matcher(line);
+                    	Matcher rateMatcher = RATELIMIT_RETRY_PATTERN.matcher(line);
                     	if (rateMatcher.find())
                     		_mUserError = rateMatcher.group(1);
                     	else
@@ -1232,13 +1211,13 @@ public class RedditCommentsListActivity extends ListActivity
             	if (Constants.LOGGING) Common.logDLong(TAG, line);
 
             	String newId;
-            	Matcher idMatcher = Constants.NEW_ID_PATTERN.matcher(line);
+            	Matcher idMatcher = NEW_ID_PATTERN.matcher(line);
             	if (idMatcher.find()) {
             		newId = idMatcher.group(3);
             	} else {
             		if (line.contains("RATELIMIT")) {
                 		// Try to find the # of minutes using regex
-                    	Matcher rateMatcher = Constants.RATELIMIT_RETRY_PATTERN.matcher(line);
+                    	Matcher rateMatcher = RATELIMIT_RETRY_PATTERN.matcher(line);
                     	if (rateMatcher.find())
                     		_mUserError = rateMatcher.group(1);
                     	else
@@ -1772,16 +1751,15 @@ public class RedditCommentsListActivity extends ListActivity
     		Common.updateListDrawables(this, mSettings.theme);
     		break;
         case R.id.inbox_menu_id:
-        	Intent inboxIntent = new Intent(this, InboxActivity.class);
+        	Intent inboxIntent = new Intent(getApplicationContext(), InboxActivity.class);
         	startActivity(inboxIntent);
         	break;
 //        case R.id.user_profile_menu_id:
-//        	Intent profileIntent = new Intent(this, UserActivity.class);
+//        	Intent profileIntent = new Intent(getApplicationContext(), UserActivity.class);
 //        	startActivity(profileIntent);
 //        	break;
     	case R.id.preferences_menu_id:
-            Intent prefsIntent = new Intent(this,
-                    RedditPreferencesPage.class);
+            Intent prefsIntent = new Intent(getApplicationContext(), RedditPreferencesPage.class);
             startActivity(prefsIntent);
             break;
 
@@ -2090,6 +2068,8 @@ public class RedditCommentsListActivity extends ListActivity
     		break;
     		
     	case Constants.DIALOG_THING_CLICK:
+    		if (mVoteTargetCommentInfo == null)
+    			break;
     		String likes;
     		final TextView titleView = (TextView) dialog.findViewById(R.id.title);
     		final TextView urlView = (TextView) dialog.findViewById(R.id.url);
@@ -2109,10 +2089,12 @@ public class RedditCommentsListActivity extends ListActivity
     			if (("self.").toLowerCase().equals(mOpThreadInfo.getDomain().substring(0, 5).toLowerCase())) {
     				linkButton.setVisibility(View.INVISIBLE);
     			} else {
+    				final String url = mOpThreadInfo.getURL();
 	    			linkButton.setOnClickListener(new OnClickListener() {
 	    				public void onClick(View v) {
 	    					dismissDialog(Constants.DIALOG_THING_CLICK);
-	    					Common.launchBrowser(mOpThreadInfo.getURL(), RedditCommentsListActivity.this);
+	    					// Launch Intent to goto the URL
+	    					Common.launchBrowser(url, RedditCommentsListActivity.this);
 	    				}
 	    			});
 	    			linkButton.setVisibility(View.VISIBLE);
@@ -2219,8 +2201,8 @@ public class RedditCommentsListActivity extends ListActivity
 	    			voteDownButton.setChecked(false);
 	    		}
 	    		// Now we want the user to be able to vote.
-	    		voteUpButton.setOnCheckedChangeListener(new VoteUpOnCheckedChangeListener());
-	    		voteDownButton.setOnCheckedChangeListener(new VoteDownOnCheckedChangeListener());
+	    		voteUpButton.setOnCheckedChangeListener(voteUpOnCheckedChangeListener);
+	    		voteDownButton.setOnCheckedChangeListener(voteDownOnCheckedChangeListener);
 
 	    		// The "reply" button
     			replyButton.setOnClickListener(new OnClickListener() {
@@ -2244,7 +2226,7 @@ public class RedditCommentsListActivity extends ListActivity
     		break;
     		
     	case Constants.DIALOG_REPLY:
-    		if (mVoteTargetCommentInfo.getReplyDraft() != null) {
+    		if (mVoteTargetCommentInfo != null && mVoteTargetCommentInfo.getReplyDraft() != null) {
     			EditText replyBodyView = (EditText) dialog.findViewById(R.id.body); 
     			replyBodyView.setText(mVoteTargetCommentInfo.getReplyDraft());
     		}
@@ -2259,6 +2241,36 @@ public class RedditCommentsListActivity extends ListActivity
 			break;
     	}
     }
+    
+    private final CompoundButton.OnCheckedChangeListener voteUpOnCheckedChangeListener = new CompoundButton.OnCheckedChangeListener() {
+    	public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+	    	dismissDialog(Constants.DIALOG_THING_CLICK);
+	    	String thingFullname;
+	    	if (mVoteTargetCommentInfo.getOP() != null)
+	    		thingFullname = mVoteTargetCommentInfo.getOP().getName();
+	    	else
+	    		thingFullname = mVoteTargetCommentInfo.getName();
+			if (isChecked)
+				new VoteTask(thingFullname, 1).execute();
+			else
+				new VoteTask(thingFullname, 0).execute();
+		}
+    };
+    private final CompoundButton.OnCheckedChangeListener voteDownOnCheckedChangeListener = new CompoundButton.OnCheckedChangeListener() {
+	    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+	    	dismissDialog(Constants.DIALOG_THING_CLICK);
+	    	String thingFullname;
+	    	if (mVoteTargetCommentInfo.getOP() != null)
+	    		thingFullname = mVoteTargetCommentInfo.getOP().getName();
+	    	else
+	    		thingFullname = mVoteTargetCommentInfo.getName();
+			if (isChecked)
+				new VoteTask(thingFullname, -1).execute();
+			else
+				new VoteTask(thingFullname, 0).execute();
+		}
+    };
+    
     
     @Override
     protected void onSaveInstanceState(Bundle state) {

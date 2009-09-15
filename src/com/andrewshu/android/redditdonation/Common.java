@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
 import org.apache.http.Header;
@@ -41,11 +42,17 @@ import org.apache.http.NameValuePair;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.conn.ClientConnectionManager;
+import org.apache.http.conn.scheme.PlainSocketFactory;
+import org.apache.http.conn.scheme.Scheme;
+import org.apache.http.conn.scheme.SchemeRegistry;
 import org.apache.http.cookie.Cookie;
 import org.apache.http.entity.HttpEntityWrapper;
 import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.conn.tsccm.ThreadSafeClientConnManager;
 import org.apache.http.impl.cookie.BasicClientCookie;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.params.BasicHttpParams;
 import org.apache.http.params.HttpConnectionParams;
 import org.apache.http.params.HttpParams;
 import org.apache.http.protocol.HTTP;
@@ -78,6 +85,8 @@ import android.widget.Toast;
 public class Common {
 	
 	private static final String TAG = "Common";
+	
+	private static final DefaultHttpClient mGzipHttpClient = createGzipHttpClient();
 	
 	static void showErrorToast(CharSequence error, int duration, Context context) {
 		LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
@@ -293,8 +302,10 @@ public class Common {
      * @return
      */
     static String doUpdateModhash(DefaultHttpClient client) {
+        final Pattern MODHASH_PATTERN = Pattern.compile("modhash: '(.*?)'");
     	String modhash;
     	HttpEntity entity = null;
+        // The pattern to find modhash from HTML javascript area
     	try {
     		HttpGet httpget = new HttpGet(Constants.MODHASH_URL);
     		HttpResponse response = client.execute(httpget);
@@ -321,7 +332,7 @@ public class Common {
         		throw new Exception("User session error: USER_REQUIRED");
         	}
         	
-        	Matcher modhashMatcher = Constants.MODHASH_PATTERN.matcher(line);
+        	Matcher modhashMatcher = MODHASH_PATTERN.matcher(line);
         	if (modhashMatcher.find()) {
         		modhash = modhashMatcher.group(1);
         		if (Constants.EMPTY_STRING.equals(modhash)) {
@@ -483,8 +494,16 @@ public class Common {
 	 * http://hc.apache.org/httpcomponents-client/examples.html
 	 * @return a Gzip-enabled DefaultHttpClient
 	 */
-	static DefaultHttpClient createGzipHttpClient() {
-        DefaultHttpClient httpclient = new DefaultHttpClient();
+	static DefaultHttpClient getGzipHttpClient() {
+		return mGzipHttpClient;
+	}
+	
+	private static DefaultHttpClient createGzipHttpClient() {
+		BasicHttpParams params = new BasicHttpParams();
+		SchemeRegistry schemeRegistry = new SchemeRegistry();
+		schemeRegistry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+		ClientConnectionManager cm = new ThreadSafeClientConnManager(params, schemeRegistry);
+		DefaultHttpClient httpclient = new DefaultHttpClient(cm, params);
         httpclient.addRequestInterceptor(new HttpRequestInterceptor() {
             public void process(
                     final HttpRequest request, 

@@ -94,7 +94,7 @@ public final class RedditIsFun extends ListActivity {
     /** Custom list adapter that fits our threads data into the list. */
     private ThreadsListAdapter mThreadsAdapter;
 
-    private final DefaultHttpClient mClient = Common.createGzipHttpClient();
+    private final DefaultHttpClient mClient = Common.getGzipHttpClient();
 	
    
     private final RedditSettings mSettings = new RedditSettings();
@@ -130,7 +130,7 @@ public final class RedditIsFun extends ListActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
                 
-        Common.loadRedditPreferences(this, mSettings, mClient);
+        Common.loadRedditPreferences(getApplicationContext(), mSettings, mClient);
         setTheme(mSettings.theme);
         
         setContentView(R.layout.threads_list_content);
@@ -160,7 +160,7 @@ public final class RedditIsFun extends ListActivity {
     	super.onResume();
     	int previousTheme = mSettings.theme;
     	boolean previousLoggedIn = mSettings.loggedIn;
-    	Common.loadRedditPreferences(this, mSettings, mClient);
+    	Common.loadRedditPreferences(getApplicationContext(), mSettings, mClient);
     	if (mSettings.theme != previousTheme) {
     		setTheme(mSettings.theme);
     		setContentView(R.layout.threads_list_content);
@@ -187,7 +187,7 @@ public final class RedditIsFun extends ListActivity {
     @Override
     protected void onPause() {
     	super.onPause();
-    	Common.saveRedditPreferences(this, mSettings);
+    	Common.saveRedditPreferences(getApplicationContext(), mSettings);
     }
     
 
@@ -215,7 +215,7 @@ public final class RedditIsFun extends ListActivity {
 	    		String newTitle = extras.getString(ThreadInfo.TITLE);
 	    		mSettings.setSubreddit(newSubreddit);
 	    		// Start up comments list with the new thread
-	    		Intent i = new Intent(RedditIsFun.this, RedditCommentsListActivity.class);
+	    		Intent i = new Intent(getApplicationContext(), RedditCommentsListActivity.class);
 				i.putExtra(ThreadInfo.SUBREDDIT, newSubreddit);
 				i.putExtra(ThreadInfo.ID, newId);
 				i.putExtra(ThreadInfo.TITLE, newTitle);
@@ -230,28 +230,6 @@ public final class RedditIsFun extends ListActivity {
     	}
     }
     
-    
-    private class VoteUpOnCheckedChangeListener implements CompoundButton.OnCheckedChangeListener {
-    	public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-	    	dismissDialog(Constants.DIALOG_THING_CLICK);
-			if (isChecked) {
-				new VoteTask(mVoteTargetThreadInfo.getName(), 1, mVoteTargetThreadInfo.getSubreddit()).execute();
-			} else {
-				new VoteTask(mVoteTargetThreadInfo.getName(), 0, mVoteTargetThreadInfo.getSubreddit()).execute();
-			}
-		}
-    }
-    
-    private class VoteDownOnCheckedChangeListener implements CompoundButton.OnCheckedChangeListener {
-	    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-	    	dismissDialog(Constants.DIALOG_THING_CLICK);
-			if (isChecked) {
-				new VoteTask(mVoteTargetThreadInfo.getName(), -1, mVoteTargetThreadInfo.getSubreddit()).execute();
-			} else {
-				new VoteTask(mVoteTargetThreadInfo.getName(), 0, mVoteTargetThreadInfo.getSubreddit()).execute();
-			}
-		}
-    }
     
     private final class ThreadsListAdapter extends ArrayAdapter<ThreadInfo> {
     	static final int THREAD_ITEM_VIEW_TYPE = 0;
@@ -442,21 +420,13 @@ public final class RedditIsFun extends ListActivity {
             	final Button previousButton = (Button) view.findViewById(R.id.previous_button);
             	if (mAfter != null) {
             		nextButton.setVisibility(View.VISIBLE);
-            		nextButton.setOnClickListener(new OnClickListener() {
-            			public void onClick(View v) {
-            				new DownloadThreadsTask().execute(mSettings.subreddit, mAfter);
-            			}
-            		});
+            		nextButton.setOnClickListener(downloadAfterOnClickListener);
             	} else {
             		nextButton.setVisibility(View.INVISIBLE);
             	}
             	if (mBefore != null && mCount != Constants.DEFAULT_THREAD_DOWNLOAD_LIMIT) {
             		previousButton.setVisibility(View.VISIBLE);
-            		previousButton.setOnClickListener(new OnClickListener() {
-            			public void onClick(View v) {
-            				new DownloadThreadsTask().execute(mSettings.subreddit, null, mBefore);
-            			}
-            		});
+            		previousButton.setOnClickListener(downloadBeforeOnClickListener);
             	} else {
             		previousButton.setVisibility(View.INVISIBLE);
             	}
@@ -687,9 +657,6 @@ public final class RedditIsFun extends ListActivity {
     	}
     	
     	public void onPreExecute() {
-    		if (mSettings.subreddit == null)
-	    		this.cancel(true);
-	    	
     		resetUI();
     		mThreadsAdapter.mIsLoading = true;
     		
@@ -759,7 +726,7 @@ public final class RedditIsFun extends ListActivity {
     		if (errorMessage == null) {
     			Toast.makeText(RedditIsFun.this, "Logged in as "+mUsername, Toast.LENGTH_SHORT).show();
     			// Check mail
-    			new Common.PeekEnvelopeTask(RedditIsFun.this, mClient, mSettings.mailNotificationStyle).execute();
+    			new Common.PeekEnvelopeTask(getApplicationContext(), mClient, mSettings.mailNotificationStyle).execute();
     			// Refresh the threads list
     			new DownloadThreadsTask().execute(mSettings.subreddit);
         	} else {
@@ -1039,7 +1006,7 @@ public final class RedditIsFun extends ListActivity {
         
         switch (item.getItemId()) {
         case R.id.pick_subreddit_menu_id:
-    		Intent pickSubredditIntent = new Intent(this, PickSubredditActivity.class);
+    		Intent pickSubredditIntent = new Intent(getApplicationContext(), PickSubredditActivity.class);
     		startActivityForResult(pickSubredditIntent, Constants.ACTIVITY_PICK_SUBREDDIT);
     		break;
     	case R.id.login_logout_menu_id:
@@ -1055,7 +1022,7 @@ public final class RedditIsFun extends ListActivity {
     		new DownloadThreadsTask().execute(mSettings.subreddit);
     		break;
     	case R.id.submit_link_menu_id:
-    		Intent submitLinkIntent = new Intent(this, SubmitLinkActivity.class);
+    		Intent submitLinkIntent = new Intent(getApplicationContext(), SubmitLinkActivity.class);
     		submitLinkIntent.putExtra(ThreadInfo.SUBREDDIT, mSettings.subreddit);
     		startActivityForResult(submitLinkIntent, Constants.ACTIVITY_SUBMIT_LINK);
     		break;
@@ -1082,16 +1049,15 @@ public final class RedditIsFun extends ListActivity {
     		Common.updateListDrawables(this, mSettings.theme);
     		break;
         case R.id.inbox_menu_id:
-        	Intent inboxIntent = new Intent(this, InboxActivity.class);
+        	Intent inboxIntent = new Intent(getApplicationContext(), InboxActivity.class);
         	startActivity(inboxIntent);
         	break;
 //        case R.id.user_profile_menu_id:
-//        	Intent profileIntent = new Intent(this, UserActivity.class);
+//        	Intent profileIntent = new Intent(getApplicationContext(), UserActivity.class);
 //        	startActivity(profileIntent);
 //        	break;
     	case R.id.preferences_menu_id:
-            Intent prefsIntent = new Intent(this,
-                    RedditPreferencesPage.class);
+            Intent prefsIntent = new Intent(getApplicationContext(), RedditPreferencesPage.class);
             startActivity(prefsIntent);
             break;
 
@@ -1295,6 +1261,8 @@ public final class RedditIsFun extends ListActivity {
     		break;
     		
     	case Constants.DIALOG_THING_CLICK:
+    		if (mVoteTargetThreadInfo == null)
+    			break;
     		final CheckBox voteUpButton = (CheckBox) dialog.findViewById(R.id.vote_up_button);
     		final CheckBox voteDownButton = (CheckBox) dialog.findViewById(R.id.vote_down_button);
     		final TextView titleView = (TextView) dialog.findViewById(R.id.title);
@@ -1333,8 +1301,8 @@ public final class RedditIsFun extends ListActivity {
 	    			voteUpButton.setChecked(false);
 	    			voteDownButton.setChecked(false);
 	    		}
-	    		voteUpButton.setOnCheckedChangeListener(new VoteUpOnCheckedChangeListener());
-	    		voteDownButton.setOnCheckedChangeListener(new VoteDownOnCheckedChangeListener());
+	    		voteUpButton.setOnCheckedChangeListener(voteUpOnCheckedChangeListener);
+	    		voteDownButton.setOnCheckedChangeListener(voteDownOnCheckedChangeListener);
     		} else {
     			voteUpButton.setVisibility(View.GONE);
     			voteDownButton.setVisibility(View.GONE);
@@ -1348,31 +1316,20 @@ public final class RedditIsFun extends ListActivity {
     		}
 
     		// The "link" and "comments" buttons
-    		OnClickListener commentsOnClickListener = new OnClickListener() {
-    			public void onClick(View v) {
-    				dismissDialog(Constants.DIALOG_THING_CLICK);
-    				// Launch an Intent for RedditCommentsListActivity
-    				Intent i = new Intent(RedditIsFun.this, RedditCommentsListActivity.class);
-    				i.putExtra(ThreadInfo.SUBREDDIT, mVoteTargetThreadInfo.getSubreddit());
-    				i.putExtra(ThreadInfo.ID, mVoteTargetThreadInfo.getId());
-    				i.putExtra(ThreadInfo.TITLE, mVoteTargetThreadInfo.getTitle());
-    				i.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mVoteTargetThreadInfo.getNumComments()));
-    				startActivity(i);
-        		}
-    		};
     		commentsButton.setOnClickListener(commentsOnClickListener);
     		// TODO: Handle bestof posts, which aren't self posts
             if (("self.").toLowerCase().equals(mVoteTargetThreadInfo.getDomain().substring(0, 5).toLowerCase())) {
             	// It's a self post. Both buttons do the same thing.
             	linkButton.setOnClickListener(commentsOnClickListener);
             } else {
+            	final String url = mVoteTargetThreadInfo.getURL();
             	linkButton.setOnClickListener(new OnClickListener() {
-            		public void onClick(View v) {
-            			dismissDialog(Constants.DIALOG_THING_CLICK);
-            			// Launch Intent to goto the URL
-            			Common.launchBrowser(mVoteTargetThreadInfo.getURL(), RedditIsFun.this);
-            		}
-            	});
+    				public void onClick(View v) {
+    					dismissDialog(Constants.DIALOG_THING_CLICK);
+    					// Launch Intent to goto the URL
+    					Common.launchBrowser(url, RedditIsFun.this);
+    				}
+    			});
             }
     		break;
     		
@@ -1385,6 +1342,51 @@ public final class RedditIsFun extends ListActivity {
 			break;
     	}
     }
+    
+    private final OnClickListener downloadAfterOnClickListener = new OnClickListener() {
+		public void onClick(View v) {
+			new DownloadThreadsTask().execute(mSettings.subreddit, mAfter);
+		}
+	};
+	private final OnClickListener downloadBeforeOnClickListener = new OnClickListener() {
+		public void onClick(View v) {
+			new DownloadThreadsTask().execute(mSettings.subreddit, null, mBefore);
+		}
+	};
+	private final CompoundButton.OnCheckedChangeListener voteUpOnCheckedChangeListener = new CompoundButton.OnCheckedChangeListener() {
+    	public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+	    	dismissDialog(Constants.DIALOG_THING_CLICK);
+			if (isChecked) {
+				new VoteTask(mVoteTargetThreadInfo.getName(), 1, mVoteTargetThreadInfo.getSubreddit()).execute();
+			} else {
+				new VoteTask(mVoteTargetThreadInfo.getName(), 0, mVoteTargetThreadInfo.getSubreddit()).execute();
+			}
+		}
+    };
+    private final CompoundButton.OnCheckedChangeListener voteDownOnCheckedChangeListener = new CompoundButton.OnCheckedChangeListener() {
+	    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+	    	dismissDialog(Constants.DIALOG_THING_CLICK);
+			if (isChecked) {
+				new VoteTask(mVoteTargetThreadInfo.getName(), -1, mVoteTargetThreadInfo.getSubreddit()).execute();
+			} else {
+				new VoteTask(mVoteTargetThreadInfo.getName(), 0, mVoteTargetThreadInfo.getSubreddit()).execute();
+			}
+		}
+    };
+    private final OnClickListener commentsOnClickListener = new OnClickListener() {
+		public void onClick(View v) {
+			dismissDialog(Constants.DIALOG_THING_CLICK);
+			// Launch an Intent for RedditCommentsListActivity
+			Intent i = new Intent(getApplicationContext(), RedditCommentsListActivity.class);
+			i.putExtra(ThreadInfo.SUBREDDIT, mVoteTargetThreadInfo.getSubreddit());
+			i.putExtra(ThreadInfo.ID, mVoteTargetThreadInfo.getId());
+			i.putExtra(ThreadInfo.TITLE, mVoteTargetThreadInfo.getTitle());
+			i.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mVoteTargetThreadInfo.getNumComments()));
+			startActivity(i);
+		}
+	};
+	
+	
     
     @Override
     protected void onSaveInstanceState(Bundle state) {
