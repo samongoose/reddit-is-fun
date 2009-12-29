@@ -24,7 +24,14 @@ import android.app.Activity;
 public class Constants {
 	
 	static final boolean LOGGING = false;
-
+	
+	// File containing the serialized variables of last subreddit viewed
+	static final String FILENAME_SUBREDDIT_CACHE = "subreddit.dat";
+	// File containing the serialized variables of last comments viewed
+	static final String FILENAME_COMMENTS_CACHE = "comments.dat";
+	// File containing a long integer System.currentTimeMillis(). Timestamp is shared among caches.
+	static final String FILENAME_CACHE_TIME = "cachetime.dat";
+	
 	static final String COMMENT_KIND = "t1";
 	static final String THREAD_KIND = "t3";
 	static final String MESSAGE_KIND = "t4";
@@ -35,7 +42,8 @@ public class Constants {
 
 	static final int DEFAULT_THREAD_DOWNLOAD_LIMIT = 25;
     static final int DEFAULT_COMMENT_DOWNLOAD_LIMIT = 200;
-    
+    static final long DEFAULT_FRESH_DURATION = 1800000;  // 30 minutes
+
     // startActivityForResult request codes
     static final int ACTIVITY_PICK_SUBREDDIT = 0;
     static final int ACTIVITY_SUBMIT_LINK = 1;
@@ -49,9 +57,9 @@ public class Constants {
     // --- Intent extras ---
     // Tell PickSubredditActivity to hide the fronptage string
     static final String EXTRA_HIDE_FRONTPAGE_STRING = "hideFrontpage";
-    // Tell RedditCommentsListActivity to jump to a comment context (a URL. pattern match)
+    // Tell CommentsListActivity to jump to a comment context (a URL. pattern match)
     static final String EXTRA_COMMENT_CONTEXT = "jumpToComment";
-    // Tell RedditCommentsListActivity to show "more children"
+    // Tell CommentsListActivity to show "more children"
     static final String EXTRA_MORE_CHILDREN_ID = "moreChildrenId";
     
     // User-defined result codes
@@ -90,6 +98,8 @@ public class Constants {
     static final int DIALOG_LOADING_INBOX = 1007;
     static final int DIALOG_DELETING = 1008;
     static final int DIALOG_EDITING = 1009;
+    static final int DIALOG_LOADING_THREADS_CACHE = 1010;
+    static final int DIALOG_LOADING_COMMENTS_CACHE = 1011;
     
     // Special CSS for webviews to match themes
     static final String CSS_DARK = "<style>body{color:#c0c0c0;background-color:#191919}a:link{color:#ffffff}</style>";

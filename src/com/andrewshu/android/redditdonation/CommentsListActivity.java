@@ -20,9 +20,13 @@
 package com.andrewshu.android.redditdonation;
 
 import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -98,10 +102,10 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
  * @author TalkLittle
  *
  */
-public class RedditCommentsListActivity extends ListActivity
+public class CommentsListActivity extends ListActivity
 		implements View.OnCreateContextMenuListener {
 
-	private static final String TAG = "RedditCommentsListActivity";
+	private static final String TAG = "CommentsListActivity";
 	
     // Group 1: fullname. Group 2: kind. Group 3: id36.
     private final Pattern NEW_ID_PATTERN = Pattern.compile("\"id\": \"((.+?)_(.+?))\"");
@@ -113,10 +117,10 @@ public class RedditCommentsListActivity extends ListActivity
     private final JsonFactory jsonFactory = new JsonFactory();
     private final Markdown markdown = new Markdown();
     private int mNestedCommentsJSONOrder = 0;
-    private HashSet<Integer> mMorePositions = new HashSet<Integer>(); 
 	
     /** Custom list adapter that fits our threads data into the list. */
     private CommentsListAdapter mCommentsAdapter;
+    private ArrayList<CommentInfo> mCommentsList;
     
     private final DefaultHttpClient mClient = Common.getGzipHttpClient();
     
@@ -124,27 +128,33 @@ public class RedditCommentsListActivity extends ListActivity
     // Common settings are stored here
     private final RedditSettings mSettings = new RedditSettings();
     
-    private ThreadInfo mOpThreadInfo;
-    private CharSequence mThreadTitle = null;
-    private int mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
-    private CharSequence mSortByUrl = Constants.CommentsSort.SORT_BY_BEST_URL;
-    private int mJumpToCommentPosition = 0;
-    private CharSequence mJumpToCommentId = null;
+    // Whether the cache should be used during onResume().
+    volatile private boolean mShouldUseCommentsCache = true;
     
-	private CharSequence mMoreChildrenId = null;
+    // Navigation items to be cached
+    private long mLastRefreshTime = 0;
+    private CharSequence mJumpToCommentId = null;
+    private int mJumpToCommentPosition = 0;
+    private CharSequence mMoreChildrenId = "";
+    private HashSet<Integer> mMorePositions = new HashSet<Integer>();
+    private int mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
+    private ThreadInfo mOpThreadInfo;
+    private CharSequence mSortByUrl = Constants.CommentsSort.SORT_BY_BEST_URL;
+    private CharSequence mThreadTitle = null;
+    // should also cache mSettings.subreddit and mSettings.threadId
+    // End navigation to be cached
 	
     // Keep track of the row ids of comments that user has hidden
     private HashSet<Integer> mHiddenCommentHeads = new HashSet<Integer>();
     // Keep track of the row ids of descendants of hidden comment heads
     private HashSet<Integer> mHiddenComments = new HashSet<Integer>();
-
+    
     // UI State
-    private View mVoteTargetView = null;
     private CommentInfo mVoteTargetCommentInfo = null;
     private CharSequence mReplyTargetName = null;
     private CharSequence mEditTargetBody = null;
     private String mDeleteTargetKind = null;
-    private DownloadCommentsTask mCurrentDownloadCommentsTask = null;
+    private AsyncTask mCurrentDownloadCommentsTask = null;
     private final Object mCurrentDownloadCommentsTaskLock = new Object();
     
     // ProgressDialogs with percentage bars
@@ -166,23 +176,29 @@ public class RedditCommentsListActivity extends ListActivity
         setTheme(mSettings.theme);
         
         setContentView(R.layout.comments_list_content);
-        // HACK: set background color directly for android 2.0
-        if (mSettings.theme == R.style.Reddit_Light)
-        	getListView().setBackgroundResource(R.color.white);
         registerForContextMenu(getListView());
         // The above layout contains a list id "android:list"
         // which ListActivity adopts as its list -- we can
         // access it with getListView().
         
         // Pull current subreddit and thread info from Intent
-        Bundle extras = getIntent().getExtras();
+        Intent intent = getIntent();
+        if (intent == null) {
+        	// onResume() should handle this. Probably read from cache.
+        	mShouldUseCommentsCache = true;
+        	return;
+        }
+        
+        Bundle extras = intent.getExtras();
         if (extras == null) {
-        	// Quit, because the Comments List requires subreddit and thread id from Intent.
-        	if (Constants.LOGGING) Log.e(TAG, "Quitting because no subreddit and thread id data was passed into the Intent.");
-        	finish();
+        	if (Constants.LOGGING) Log.d(TAG, "No info in Intent. Using comments cache instead.");
+        	// See onResume()
+			return;
         }
     	// More children: displaying something that's not the root of comments list.
     	mMoreChildrenId = extras.getCharSequence(Constants.EXTRA_MORE_CHILDREN_ID);
+    	if (mMoreChildrenId == null)
+    		mMoreChildrenId = "";
     	// Comment context: a URL pointing directly at a comment, versus a thread
     	String commentContext = extras.getString(Constants.EXTRA_COMMENT_CONTEXT);
     	if (commentContext != null) {
@@ -192,9 +208,9 @@ public class RedditCommentsListActivity extends ListActivity
     			mSettings.setThreadId(commentContextMatcher.group(3));
     			mJumpToCommentId = commentContextMatcher.group(4);
     		} else {
-    			// Quit, because the Comments List requires subreddit and thread id from Intent.
-    			if (Constants.LOGGING) Log.e(TAG, "Quitting because of bad comment context.");
-            	finish();
+    			if (Constants.LOGGING) Log.d(TAG, "No info in Intent. Using comments cache instead.");
+            	mShouldUseCommentsCache = true;
+    			return;
     		}
     	} else {
         	mSettings.setThreadId(extras.getString(ThreadInfo.ID));
@@ -209,7 +225,6 @@ public class RedditCommentsListActivity extends ListActivity
         		mNumVisibleComments = Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT;
     	}
     	
-    	
     	if (savedInstanceState != null) {
         	mSortByUrl = savedInstanceState.getCharSequence(Constants.CommentsSort.SORT_BY_KEY);
        		mJumpToCommentId = savedInstanceState.getCharSequence(Constants.JUMP_TO_COMMENT_ID_KEY);
@@ -217,9 +232,19 @@ public class RedditCommentsListActivity extends ListActivity
         	mEditTargetBody = savedInstanceState.getCharSequence(Constants.EDIT_TARGET_BODY_KEY);
         	mDeleteTargetKind = savedInstanceState.getString(Constants.DELETE_TARGET_KIND_KEY);
         	mJumpToCommentPosition = savedInstanceState.getInt(Constants.JUMP_TO_COMMENT_POSITION_KEY);
-        }
-        
-        new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
+        	// savedInstanceState means probably rotated screen or something.
+        	mShouldUseCommentsCache = true;
+    	}
+    }
+    
+    /**
+     * Hack to explicitly set background color whenever changing ListView.
+     */
+    public void setContentView(int layoutResID) {
+    	super.setContentView(layoutResID);
+    	// HACK: set background color directly for android 2.0
+        if (mSettings.theme == R.style.Reddit_Light)
+        	getListView().setBackgroundResource(R.color.white);
     }
     
     @Override
@@ -231,32 +256,15 @@ public class RedditCommentsListActivity extends ListActivity
     	if (mSettings.theme != previousTheme) {
     		setTheme(mSettings.theme);
     		setContentView(R.layout.threads_list_content);
-            // HACK: set background color directly for android 2.0
-            if (mSettings.theme == R.style.Reddit_Light)
-            	getListView().setBackgroundResource(R.color.white);
     		registerForContextMenu(getListView());
     		setListAdapter(mCommentsAdapter);
     		getListView().setDivider(null);
     		Common.updateListDrawables(this, mSettings.theme);
     	}
-    	if (mSettings.loggedIn != previousLoggedIn) {
-    		new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
-    	}
-    	new Common.PeekEnvelopeTask(this, mClient, mSettings.mailNotificationStyle).execute();
-    	
-    	// comments list stuff
-    	if (mJumpToCommentPosition != 0) {
-    		getListView().setSelectionFromTop(mJumpToCommentPosition, 10);
-    		mJumpToCommentPosition = 0;
-    	} else if (mJumpToCommentId != null) {
-			for (int k = 0; k < mCommentsAdapter.getCount(); k++) {
-				if (mJumpToCommentId.equals(mCommentsAdapter.getItem(k).getId())) {
-					getListView().setSelectionFromTop(k, 10);
-					mJumpToCommentId = null;
-					break;
-				}
-			}
-		}
+    	if (mSettings.loggedIn != previousLoggedIn)
+    		mShouldUseCommentsCache = false;
+    	new ReadCacheTask().execute();
+	    new Common.PeekEnvelopeTask(this, mClient, mSettings.mailNotificationStyle).execute();
     }
     
     @Override
@@ -579,7 +587,6 @@ public class RedditCommentsListActivity extends ListActivity
         
         // Mark the OP post/regular comment as selected
         mVoteTargetCommentInfo = item;
-        mVoteTargetView = v;
         if (mVoteTargetCommentInfo.getOP() != null) {
         	mReplyTargetName = mVoteTargetCommentInfo.getOP().getName();
 		} else {
@@ -588,7 +595,7 @@ public class RedditCommentsListActivity extends ListActivity
 		
         if (mMorePositions.contains(position)) {
         	mJumpToCommentPosition = position;
-        	Intent moreChildrenIntent = new Intent(getApplicationContext(), RedditCommentsListActivity.class);
+        	Intent moreChildrenIntent = new Intent(getApplicationContext(), CommentsListActivity.class);
         	moreChildrenIntent.putExtra(ThreadInfo.SUBREDDIT, mOpThreadInfo.getSubreddit());
         	moreChildrenIntent.putExtra(ThreadInfo.ID, mOpThreadInfo.getId());
         	moreChildrenIntent.putExtra(ThreadInfo.TITLE, mOpThreadInfo.getTitle());
@@ -601,15 +608,50 @@ public class RedditCommentsListActivity extends ListActivity
         		showDialog(Constants.DIALOG_THING_CLICK);
         }
     }
+    
+    
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // When the user presses back, clear the comments cache.
+            deleteFile(Constants.FILENAME_COMMENTS_CACHE);
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    
+    /**
+     * Try jumping to mJumpToCommentPosition. failing that, try mJumpToCommentId.
+     */
+    private void jumpToComment() {
+	    if (mJumpToCommentPosition != 0) {
+			getListView().setSelectionFromTop(mJumpToCommentPosition, 10);
+			mJumpToCommentPosition = 0;
+		} else if (mJumpToCommentId != null && mCommentsAdapter != null) {
+			for (int k = 0; k < mCommentsAdapter.getCount(); k++) {
+				if (mJumpToCommentId.equals(mCommentsAdapter.getItem(k).getId())) {
+					getListView().setSelectionFromTop(k, 10);
+					mJumpToCommentId = null;
+					break;
+				}
+			}
+		}
+    }
 
     /**
      * Resets the output UI list contents, retains session state.
+     * @param commentsAdapter A new CommentsListAdapter to use. Pass in null to create a new empty one.
      */
-    public void resetUI() {
-        // Reset the list to be empty.
-        List<CommentInfo> items = new ArrayList<CommentInfo>();
-        mCommentsAdapter = new CommentsListAdapter(this, items);
+    public void resetUI(CommentsListAdapter commentsAdapter) {
+    	if (commentsAdapter == null) {
+    		// Reset the list to be empty.
+    		mCommentsList = new ArrayList<CommentInfo>();
+            mCommentsAdapter = new CommentsListAdapter(this, mCommentsList);
+    	} else {
+    		mCommentsAdapter = commentsAdapter;
+    	}
         setListAdapter(mCommentsAdapter);
+        mCommentsAdapter.notifyDataSetChanged();  // Just in case
         getListView().setDivider(null);
         Common.updateListDrawables(this, mSettings.theme);
         mHiddenComments.clear();
@@ -621,6 +663,12 @@ public class RedditCommentsListActivity extends ListActivity
     /**
      * Task takes in a subreddit name string and thread id, downloads its data, parses
      * out the comments, and communicates them back to the UI as they are read.
+     * 
+     * Requires the following navigation variables to be set:
+     * mSettings.subreddit
+     * mSettings.threadId
+     * mMoreChildrenId (can be "")
+     * mSortByUrl
      */
     class DownloadCommentsTask extends AsyncTask<Integer, Integer, Boolean> {
     	
@@ -634,12 +682,8 @@ public class RedditCommentsListActivity extends ListActivity
             	StringBuilder sb = new StringBuilder("http://www.reddit.com/r/")
 	        		.append(mSettings.subreddit.toString().trim())
 	        		.append("/comments/")
-	        		.append(mSettings.threadId);
-            	if (mMoreChildrenId == null) {
-            		sb = sb.append("/.json?").append(mSortByUrl).append("&");
-            	} else {
-            		sb = sb.append("/z/").append(mMoreChildrenId).append(".json?").append(mSortByUrl).append("&");
-            	}
+	        		.append(mSettings.threadId)
+	        		.append("/z/").append(mMoreChildrenId).append(".json?").append(mSortByUrl).append("&");
             	HttpGet request = new HttpGet(sb.toString());
                 HttpResponse response = mClient.execute(request);
             	entity = response.getEntity();
@@ -911,9 +955,8 @@ public class RedditCommentsListActivity extends ListActivity
 							} else {
 								jp.nextToken(); // move to value
 								if (Constants.JSON_BODY.equals(namefield)) {
-//									ci.put(namefield, StringEscapeUtils.unescapeHtml(jp.getText().trim().replaceAll("\r", "")));
-									ci.mSSBBody = markdown.markdown(StringEscapeUtils.unescapeHtml(jp.getText().trim()),
-											new SpannableStringBuilder(), ci.mUrls);
+									ci.put(namefield, StringEscapeUtils.unescapeHtml(jp.getText().trim().replaceAll("\r", "")));
+									ci.mSSBBody = markdown.markdown(ci.getBody(), new SpannableStringBuilder(), ci.mUrls);
 								} else {
 									ci.put(namefield, jp.getText().trim().replaceAll("\r", ""));
 								}
@@ -942,11 +985,13 @@ public class RedditCommentsListActivity extends ListActivity
 	    			mCurrentDownloadCommentsTask.cancel(true);
 	    		mCurrentDownloadCommentsTask = this;
     		}
-    		resetUI();
+    		resetUI(null);
     		mCommentsAdapter.mIsLoading = true;
-	    	
+    		// In case a ReadCacheTask tries to preempt this DownloadCommentsTask
+    		mShouldUseCommentsCache = false;
+			
 	    	if ("jailbait".equals(mSettings.subreddit.toString())) {
-	    		Toast lodToast = Toast.makeText(RedditCommentsListActivity.this, "", Toast.LENGTH_LONG);
+	    		Toast lodToast = Toast.makeText(CommentsListActivity.this, "", Toast.LENGTH_LONG);
 	    		View lodView = ((LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE))
 	    			.inflate(R.layout.look_of_disapproval_view, null);
 	    		lodToast.setView(lodView);
@@ -969,23 +1014,16 @@ public class RedditCommentsListActivity extends ListActivity
 	    			mThreadTitle = mOpThreadInfo.getTitle().replaceAll("\n ", " ").replaceAll(" \n", " ").replaceAll("\n", " ");
 	    			setTitle(mThreadTitle + " : " + mSettings.subreddit);
 	    		}
+	    		// Remember this time for caching purposes
+	    		mLastRefreshTime = System.currentTimeMillis();
+	    		mShouldUseCommentsCache = true;
 	    		mCommentsAdapter.mIsLoading = false;
 	    		mCommentsAdapter.notifyDataSetChanged();
-				if (mJumpToCommentPosition != 0) {
-					getListView().setSelectionFromTop(mJumpToCommentPosition, 10);
-					mJumpToCommentPosition = 0;
-				} else if (mJumpToCommentId != null) {
-	    			for (int k = 0; k < mCommentsAdapter.getCount(); k++) {
-	    				if (mJumpToCommentId.equals(mCommentsAdapter.getItem(k).getId())) {
-	    					getListView().setSelectionFromTop(k, 10);
-	    					mJumpToCommentId = null;
-	    					break;
-	    				}
-	    			}
-	    		}
+	    		// Point the list to last comment user was looking at, if any
+	    		jumpToComment();
     		} else {
     			if (!isCancelled())
-    				Common.showErrorToast("Error downloading comments. Please try again.", Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+    				Common.showErrorToast("Error downloading comments. Please try again.", Toast.LENGTH_LONG, CommentsListActivity.this);
     		}
     	}
     	
@@ -1020,13 +1058,13 @@ public class RedditCommentsListActivity extends ListActivity
     	protected void onPostExecute(String errorMessage) {
     		dismissDialog(Constants.DIALOG_LOGGING_IN);
     		if (errorMessage == null) {
-    			Toast.makeText(RedditCommentsListActivity.this, "Logged in as "+mUsername, Toast.LENGTH_SHORT).show();
+    			Toast.makeText(CommentsListActivity.this, "Logged in as "+mUsername, Toast.LENGTH_SHORT).show();
     			// Check mail
-    			new Common.PeekEnvelopeTask(RedditCommentsListActivity.this, mClient, mSettings.mailNotificationStyle).execute();
+    			new Common.PeekEnvelopeTask(CommentsListActivity.this, mClient, mSettings.mailNotificationStyle).execute();
 	    		// Refresh the threads list
     			new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
     		} else {
-            	Common.showErrorToast(mUserError, Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+            	Common.showErrorToast(mUserError, Toast.LENGTH_LONG, CommentsListActivity.this);
     		}
     	}
     }
@@ -1048,7 +1086,7 @@ public class RedditCommentsListActivity extends ListActivity
         	
         	String status = "";
         	if (!mSettings.loggedIn) {
-        		Common.showErrorToast("You must be logged in to reply.", Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+        		Common.showErrorToast("You must be logged in to reply.", Toast.LENGTH_LONG, CommentsListActivity.this);
         		_mUserError = "Not logged in";
         		return null;
         	}
@@ -1152,7 +1190,7 @@ public class RedditCommentsListActivity extends ListActivity
     	public void onPostExecute(CharSequence newId) {
     		dismissDialog(Constants.DIALOG_REPLYING);
     		if (newId == null) {
-    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, CommentsListActivity.this);
     		} else {
     			// Refresh
     			mJumpToCommentId = newId;
@@ -1276,7 +1314,7 @@ public class RedditCommentsListActivity extends ListActivity
     	public void onPostExecute(CharSequence newId) {
     		dismissDialog(Constants.DIALOG_EDITING);
     		if (newId == null) {
-    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, CommentsListActivity.this);
     		} else {
     			// Refresh
     			mJumpToCommentId = newId;
@@ -1384,14 +1422,14 @@ public class RedditCommentsListActivity extends ListActivity
     		dismissDialog(Constants.DIALOG_DELETING);
     		if (success) {
     			if (Constants.THREAD_KIND.equals(_mKind)) {
-    				Toast.makeText(RedditCommentsListActivity.this, "Deleted thread.", Toast.LENGTH_LONG).show();
+    				Toast.makeText(CommentsListActivity.this, "Deleted thread.", Toast.LENGTH_LONG).show();
     				finish();
     			} else {
-    				Toast.makeText(RedditCommentsListActivity.this, "Deleted comment.", Toast.LENGTH_SHORT).show();
+    				Toast.makeText(CommentsListActivity.this, "Deleted comment.", Toast.LENGTH_SHORT).show();
     				new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
     			}
     		} else {
-    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, CommentsListActivity.this);
     		}
     	}
     }
@@ -1406,7 +1444,6 @@ public class RedditCommentsListActivity extends ListActivity
     	private int _mDirection;
     	private String _mUserError = "Error voting.";
     	private CommentInfo _mTargetCommentInfo;
-    	private View _mTargetView;
     	
     	// Save the previous arrow and score in case we need to revert
     	private int _mPreviousScore, _mPreviousUps, _mPreviousDowns;
@@ -1417,7 +1454,6 @@ public class RedditCommentsListActivity extends ListActivity
     		_mDirection = direction;
     		// Copy these because they can change while voting thread is running
     		_mTargetCommentInfo = mVoteTargetCommentInfo;
-    		_mTargetView = mVoteTargetView;
     	}
     	
     	@Override
@@ -1503,7 +1539,7 @@ public class RedditCommentsListActivity extends ListActivity
     	
     	public void onPreExecute() {
         	if (!mSettings.loggedIn) {
-        		Common.showErrorToast("You must be logged in to vote.", Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+        		Common.showErrorToast("You must be logged in to vote.", Toast.LENGTH_LONG, CommentsListActivity.this);
         		cancel(true);
         		return;
         	}
@@ -1512,17 +1548,8 @@ public class RedditCommentsListActivity extends ListActivity
         		throw new RuntimeException("How the hell did you vote something besides -1, 0, or 1?");
         	}
 
-        	// Update UI: 6 cases (3 original directions, each with 2 possible changes)
-        	// UI is updated *before* the transaction actually happens. If the connection breaks for
-        	// some reason, then the vote will be lost.
-        	// Oh well, happens on reddit.com too, occasionally.
-        	final ImageView ivUp = (ImageView) _mTargetView.findViewById(R.id.vote_up_image);
-        	final ImageView ivDown = (ImageView) _mTargetView.findViewById(R.id.vote_down_image);
-        	final TextView voteCounter = (TextView) _mTargetView.findViewById(R.id.votes);
-    		int newImageResourceUp, newImageResourceDown;
     		int newUps, newDowns;
         	String newLikes;
-        	
         	if (_mTargetCommentInfo.getOP() != null) {
         		_mPreviousUps = Integer.valueOf(_mTargetCommentInfo.getOP().getUps());
         		_mPreviousDowns = Integer.valueOf(_mTargetCommentInfo.getOP().getDowns());
@@ -1536,59 +1563,43 @@ public class RedditCommentsListActivity extends ListActivity
     	    	newDowns = _mPreviousDowns;
     	    	_mPreviousLikes = _mTargetCommentInfo.getLikes();
         	}
-        	if (Constants.TRUE_STRING.equals(_mPreviousLikes)) {
-        		if (_mDirection == 0) {
-        			newUps = _mPreviousUps - 1;
-        			newImageResourceUp = R.drawable.vote_up_gray;
-        			newImageResourceDown = R.drawable.vote_down_gray;
-        			newLikes = Constants.NULL_STRING;
-        		} else if (_mDirection == -1) {
-        			newUps = _mPreviousUps - 1;
-        			newDowns = _mPreviousDowns + 1;
-        			newImageResourceUp = R.drawable.vote_up_gray;
-        			newImageResourceDown = R.drawable.vote_down_blue;
-        			newLikes = Constants.FALSE_STRING;
-        		} else {
-        			cancel(true);
-        			return;
-        		}
-        	} else if (Constants.FALSE_STRING.equals(_mPreviousLikes)) {
-        		if (_mDirection == 1) {
-        			newUps = _mPreviousUps + 1;
-        			newDowns = _mPreviousDowns - 1;
-        			newImageResourceUp = R.drawable.vote_up_red;
-        			newImageResourceDown = R.drawable.vote_down_gray;
-        			newLikes = Constants.TRUE_STRING;
-        		} else if (_mDirection == 0) {
-        			newDowns = _mPreviousDowns - 1;
-        			newImageResourceUp = R.drawable.vote_up_gray;
-        			newImageResourceDown = R.drawable.vote_down_gray;
-        			newLikes = Constants.NULL_STRING;
-        		} else {
-        			cancel(true);
-        			return;
-        		}
-        	} else {
-        		if (_mDirection == 1) {
-        			newUps = _mPreviousUps + 1;
-        			newImageResourceUp = R.drawable.vote_up_red;
-        			newImageResourceDown = R.drawable.vote_down_gray;
-        			newLikes = Constants.TRUE_STRING;
-        		} else if (_mDirection == -1) {
-        			newDowns = _mPreviousDowns + 1;
-        			newImageResourceUp = R.drawable.vote_up_gray;
-        			newImageResourceDown = R.drawable.vote_down_blue;
-        			newLikes = Constants.FALSE_STRING;
-        		} else {
-        			cancel(true);
-        			return;
-        		}
-        	}
-        	
-        	ivUp.setImageResource(newImageResourceUp);
-    		ivDown.setImageResource(newImageResourceDown);
-    		String newScore = String.valueOf(newUps - newDowns);
-    		voteCounter.setText(newScore + " points");
+	        if (Constants.TRUE_STRING.equals(_mPreviousLikes)) {
+	    		if (_mDirection == 0) {
+	    			newUps = _mPreviousUps - 1;
+	    			newLikes = Constants.NULL_STRING;
+	    		} else if (_mDirection == -1) {
+	    			newUps = _mPreviousUps - 1;
+	    			newDowns = _mPreviousDowns + 1;
+	    			newLikes = Constants.FALSE_STRING;
+	    		} else {
+	    			cancel(true);
+	    			return;
+	    		}
+	    	} else if (Constants.FALSE_STRING.equals(_mPreviousLikes)) {
+	    		if (_mDirection == 1) {
+	    			newUps = _mPreviousUps + 1;
+	    			newDowns = _mPreviousDowns - 1;
+	    			newLikes = Constants.TRUE_STRING;
+	    		} else if (_mDirection == 0) {
+	    			newDowns = _mPreviousDowns - 1;
+	    			newLikes = Constants.NULL_STRING;
+	    		} else {
+	    			cancel(true);
+	    			return;
+	    		}
+	    	} else {
+	    		if (_mDirection == 1) {
+	    			newUps = _mPreviousUps + 1;
+	    			newLikes = Constants.TRUE_STRING;
+	    		} else if (_mDirection == -1) {
+	    			newDowns = _mPreviousDowns + 1;
+	    			newLikes = Constants.FALSE_STRING;
+	    		} else {
+	    			cancel(true);
+	    			return;
+	    		}
+	    	}
+
     		if (_mTargetCommentInfo.getOP() != null) {
     			_mTargetCommentInfo.getOP().setLikes(newLikes);
     			_mTargetCommentInfo.getOP().setUps(String.valueOf(newUps));
@@ -1605,9 +1616,6 @@ public class RedditCommentsListActivity extends ListActivity
     	public void onPostExecute(Boolean success) {
     		if (!success) {
     			// Vote failed. Undo the arrow and score.
-        		final ImageView ivUp = (ImageView) _mTargetView.findViewById(R.id.vote_up_image);
-            	final ImageView ivDown = (ImageView) _mTargetView.findViewById(R.id.vote_down_image);
-            	final TextView voteCounter = (TextView) _mTargetView.findViewById(R.id.votes);
             	int oldImageResourceUp, oldImageResourceDown;
         		if (Constants.TRUE_STRING.equals(_mPreviousLikes)) {
             		oldImageResourceUp = R.drawable.vote_up_red;
@@ -1619,9 +1627,6 @@ public class RedditCommentsListActivity extends ListActivity
             		oldImageResourceUp = R.drawable.vote_up_gray;
             		oldImageResourceDown = R.drawable.vote_down_gray;
             	}
-        		ivUp.setImageResource(oldImageResourceUp);
-        		ivDown.setImageResource(oldImageResourceDown);
-        		voteCounter.setText(String.valueOf(_mPreviousScore));
         		if (_mTargetCommentInfo.getOP() != null) {
         			_mTargetCommentInfo.getOP().setLikes(_mPreviousLikes);
         			_mTargetCommentInfo.getOP().setUps(String.valueOf(_mPreviousUps));
@@ -1634,7 +1639,7 @@ public class RedditCommentsListActivity extends ListActivity
         		}
         		mCommentsAdapter.notifyDataSetChanged();
         		
-    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, RedditCommentsListActivity.this);
+    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, CommentsListActivity.this);
     		}
     	}
     }
@@ -1771,9 +1776,6 @@ public class RedditCommentsListActivity extends ListActivity
     		}
     		setTheme(mSettings.theme);
     		setContentView(R.layout.threads_list_content);
-            // HACK: set background color directly for android 2.0
-            if (mSettings.theme == R.style.Reddit_Light)
-            	getListView().setBackgroundResource(R.color.white);
     		registerForContextMenu(getListView());
     		setListAdapter(mCommentsAdapter);
     		getListView().setDivider(null);
@@ -1967,7 +1969,7 @@ public class RedditCommentsListActivity extends ListActivity
 		    				dismissDialog(Constants.DIALOG_REPLY);
 	    				}
 	    				else {
-	    					Common.showErrorToast("Error replying. Please try again.", Toast.LENGTH_SHORT, RedditCommentsListActivity.this);
+	    					Common.showErrorToast("Error replying. Please try again.", Toast.LENGTH_SHORT, CommentsListActivity.this);
 	    				}
 	    			}
 	    		});
@@ -1985,7 +1987,7 @@ public class RedditCommentsListActivity extends ListActivity
 		    				dismissDialog(Constants.DIALOG_EDIT);
 	    				}
 	    				else {
-	    					Common.showErrorToast("Error editing. Please try again.", Toast.LENGTH_SHORT, RedditCommentsListActivity.this);
+	    					Common.showErrorToast("Error editing. Please try again.", Toast.LENGTH_SHORT, CommentsListActivity.this);
 	    				}
 	    			}
 	    		});
@@ -2069,6 +2071,13 @@ public class RedditCommentsListActivity extends ListActivity
     		mLoadingCommentsProgress.setCancelable(true);
     		dialog = mLoadingCommentsProgress;
     		break;
+    	case Constants.DIALOG_LOADING_COMMENTS_CACHE:
+    		pdialog = new ProgressDialog(this);
+    		pdialog.setMessage("Loading cached comments...");
+    		pdialog.setIndeterminate(true);
+    		pdialog.setCancelable(false);
+    		dialog = pdialog;
+    		break;
     	case Constants.DIALOG_REPLYING:
     		pdialog = new ProgressDialog(this);
     		pdialog.setMessage("Sending reply...");
@@ -2125,7 +2134,7 @@ public class RedditCommentsListActivity extends ListActivity
 	    				public void onClick(View v) {
 	    					dismissDialog(Constants.DIALOG_THING_CLICK);
 	    					// Launch Intent to goto the URL
-	    					Common.launchBrowser(url, RedditCommentsListActivity.this);
+	    					Common.launchBrowser(url, CommentsListActivity.this);
 	    				}
 	    			});
 	    			linkButton.setVisibility(View.VISIBLE);
@@ -2152,7 +2161,7 @@ public class RedditCommentsListActivity extends ListActivity
     	        			dismissDialog(Constants.DIALOG_THING_CLICK);
     	        			
     	    	            ArrayAdapter<String> adapter = 
-    	    	                new ArrayAdapter<String>(RedditCommentsListActivity.this, android.R.layout.select_dialog_item, urls) {
+    	    	                new ArrayAdapter<String>(CommentsListActivity.this, android.R.layout.select_dialog_item, urls) {
     	    	                public View getView(int position, View convertView, ViewGroup parent) {
     	    	                    View v = super.getView(position, convertView, parent);
     	    	                    try {
@@ -2176,12 +2185,12 @@ public class RedditCommentsListActivity extends ListActivity
     	    	                }
     	    	            };
 
-    	    	            AlertDialog.Builder b = new AlertDialog.Builder(RedditCommentsListActivity.this);
+    	    	            AlertDialog.Builder b = new AlertDialog.Builder(CommentsListActivity.this);
 
     	    	            DialogInterface.OnClickListener click = new DialogInterface.OnClickListener() {
     	    	                public final void onClick(DialogInterface dialog, int which) {
     	    	                    if (which >= 0) {
-    	    	                        Common.launchBrowser(urls.get(which), RedditCommentsListActivity.this);
+    	    	                        Common.launchBrowser(urls.get(which), CommentsListActivity.this);
     	    	                    }
     	    	                }
     	    	            };
@@ -2303,6 +2312,100 @@ public class RedditCommentsListActivity extends ListActivity
     };
     
     
+    private class ReadCacheTask extends AsyncTask<Void, Void, Boolean> {
+    	@Override
+    	public Boolean doInBackground(Void... zzz) {
+    		if (!mShouldUseCommentsCache)
+    			return false;
+    		FileInputStream fis = null;
+    		ObjectInputStream in = null;
+    		try {
+    			// read the time
+    			fis = openFileInput(Constants.FILENAME_CACHE_TIME);
+    			in = new ObjectInputStream(fis);
+    			mLastRefreshTime = in.readLong();
+    			in.close();
+    			fis.close();
+    			
+    			// Restore previous session from cache, if the cache isn't too old
+    		    if (Common.isFreshCache(mLastRefreshTime)) {
+        			fis = openFileInput(Constants.FILENAME_COMMENTS_CACHE);
+        			in = new ObjectInputStream(fis);
+        			
+        			mCommentsList = (ArrayList<CommentInfo>) in.readObject();
+        			// Process nonserializable (transient) members of the CommentInfos
+        			for (CommentInfo ci : mCommentsList) {
+        				ci.mSSBBody = markdown.markdown(ci.getBody(), new SpannableStringBuilder(), ci.mUrls); 
+        			}
+        			mJumpToCommentId = (CharSequence) in.readObject();
+        			mJumpToCommentPosition = in.readInt();
+        			mMoreChildrenId = (CharSequence) in.readObject();
+        			mMorePositions = (HashSet<Integer>) in.readObject();
+        			mNumVisibleComments = in.readInt();
+        			mOpThreadInfo = (ThreadInfo) in.readObject();
+    		    	mSettings.setSubreddit((CharSequence) in.readObject());
+    				mSettings.setThreadId((CharSequence) in.readObject());
+    				mSortByUrl = (CharSequence) in.readObject();
+    				mThreadTitle = (CharSequence) in.readObject();
+    				
+    				return true;
+    		    }
+    		    // Cache is old
+    		    return false;
+    		} catch (Exception ex) {
+    			if (Constants.LOGGING) Log.e(TAG, ex.getLocalizedMessage());
+    			deleteFile(Constants.FILENAME_COMMENTS_CACHE);
+    			return false;
+    		} finally {
+	    		try {
+	    			in.close();
+	    		} catch (Exception ignore) {}
+	    		try {
+	    			fis.close();
+	    		} catch (Exception ignore) {}
+    		}
+    	}
+    	
+    	@Override
+    	public void onPreExecute() {
+    		synchronized (mCurrentDownloadCommentsTaskLock) {
+	    		if (mCurrentDownloadCommentsTask != null)
+	    			mCurrentDownloadCommentsTask.cancel(true);
+	    		mCurrentDownloadCommentsTask = this;
+    		}
+    		showDialog(Constants.DIALOG_LOADING_COMMENTS_CACHE);
+    	}
+    	
+    	@Override
+    	public void onPostExecute(Boolean success) {
+    		try {
+    			dismissDialog(Constants.DIALOG_LOADING_COMMENTS_CACHE);
+    		} catch (Exception e) {
+    			// Ignore. Probably caused by screen rotation.
+    		}
+    		if (success) {
+    			// Use the cached threads list
+		    	resetUI(new CommentsListAdapter(CommentsListActivity.this, mCommentsList));
+		    	setTitle(mThreadTitle + " : " + mSettings.subreddit);
+		    	// Point the list to whichever comment the user was looking at
+		    	jumpToComment();
+    		} else {
+    			//Common.showErrorToast("Reading comments cache failed.", Toast.LENGTH_SHORT, CommentsListActivity.this);
+    			// Download from Internet if DownloadCommentsTask params are available
+    			if (mSettings.threadId != null) {
+    				new DownloadCommentsTask().execute(Constants.DEFAULT_COMMENT_DOWNLOAD_LIMIT);
+    			} else {
+	    			// Quit, because the Comments List requires subreddit and thread id from Intent.
+	    			if (Constants.LOGGING) Log.e(TAG, "Quitting because of bad comment URL context and no cache.");
+	    			deleteFile(Constants.FILENAME_COMMENTS_CACHE);
+	    			finish();
+    			}
+    		}
+    	}
+    }
+    
+
+    
     @Override
     protected void onSaveInstanceState(Bundle state) {
     	super.onSaveInstanceState(state);
@@ -2312,6 +2415,57 @@ public class RedditCommentsListActivity extends ListActivity
     	state.putCharSequence(Constants.REPLY_TARGET_NAME_KEY, mReplyTargetName);
     	state.putCharSequence(Constants.EDIT_TARGET_BODY_KEY, mEditTargetBody);
     	state.putString(Constants.DELETE_TARGET_KIND_KEY, mDeleteTargetKind);
+    	
+    	// Cache
+		if (mCommentsList == null || mSettings.threadId == null)
+			return;
+		FileOutputStream fos = null;
+		ObjectOutputStream out = null;
+		try {
+			// write the time
+			fos = openFileOutput(Constants.FILENAME_CACHE_TIME, MODE_PRIVATE);
+			out = new ObjectOutputStream(fos);
+			out.writeLong(mLastRefreshTime);
+			out.close();
+			fos.close();
+		} catch (IOException ex) {
+			if (Constants.LOGGING) Log.e(TAG, ex.getLocalizedMessage());
+			Common.deleteAllCaches(getApplicationContext());
+		} finally {
+			try {
+				out.close();
+			} catch (Exception ignore) {}
+			try {
+				fos.close();
+			} catch (Exception ignore) {}			
+		}
+		
+		try {
+			// Write cache variables in alphabetical order by variable name.
+			fos = openFileOutput(Constants.FILENAME_COMMENTS_CACHE, MODE_PRIVATE);
+			out = new ObjectOutputStream(fos);
+			out.writeObject(mCommentsList);
+			out.writeObject(mJumpToCommentId);
+		    out.writeInt(mJumpToCommentPosition);
+		    out.writeObject(mMoreChildrenId);
+			out.writeObject(mMorePositions);
+			out.writeInt(mNumVisibleComments);
+			out.writeObject(mOpThreadInfo);
+			out.writeObject(mSettings.subreddit);
+			out.writeObject(mSettings.threadId);
+			out.writeObject(mSortByUrl);
+			out.writeObject(mThreadTitle);
+		} catch (IOException ex) {
+			if (Constants.LOGGING) Log.e(TAG, ex.getLocalizedMessage());
+			deleteFile(Constants.FILENAME_COMMENTS_CACHE);
+		} finally {
+			try {
+				out.close();
+			} catch (Exception ignore) {}
+			try {
+				fos.close();
+			} catch (Exception ignore) {}			
+		}
     }
     
     /**
@@ -2327,6 +2481,7 @@ public class RedditCommentsListActivity extends ListActivity
         	Constants.DIALOG_DELETING,
         	Constants.DIALOG_EDIT,
         	Constants.DIALOG_EDITING,
+        	Constants.DIALOG_LOADING_COMMENTS_CACHE,
         	Constants.DIALOG_LOADING_COMMENTS_LIST,
         	Constants.DIALOG_LOGGING_IN,
         	Constants.DIALOG_LOGIN,
