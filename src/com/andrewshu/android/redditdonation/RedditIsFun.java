@@ -60,8 +60,8 @@ import android.os.Bundle;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
-import android.text.style.AbsoluteSizeSpan;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.TextAppearanceSpan;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -309,8 +309,8 @@ public final class RedditIsFun extends ListActivity {
 	            String title = item.getTitle().replaceAll("\n ", " ").replaceAll(" \n", " ").replaceAll("\n", " ");
 	            SpannableString titleSS = new SpannableString(title);
 	            int titleLen = title.length();
-	            AbsoluteSizeSpan titleASS = new AbsoluteSizeSpan(14);
-	            titleSS.setSpan(titleASS, 0, titleLen, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+	            TextAppearanceSpan titleTAS = new TextAppearanceSpan(getApplicationContext(), R.style.TextAppearance_14sp);
+	            titleSS.setSpan(titleTAS, 0, titleLen, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
 	            if (mSettings.theme == R.style.Reddit_Light) {
 	            	// FIXME: This doesn't work persistently, since "clicked" is not delivered to reddit.com
 		            if (Constants.TRUE_STRING.equals(item.getClicked())) {
@@ -324,8 +324,8 @@ public final class RedditIsFun extends ListActivity {
 	            builder.append(titleSS);
 	            builder.append(" ");
 	            SpannableString domainSS = new SpannableString("("+item.getDomain()+")");
-	            AbsoluteSizeSpan domainASS = new AbsoluteSizeSpan(10);
-	            domainSS.setSpan(domainASS, 0, item.getDomain().length()+2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+	            TextAppearanceSpan domainTAS = new TextAppearanceSpan(getApplicationContext(), R.style.TextAppearance_10sp);
+	            domainSS.setSpan(domainTAS, 0, item.getDomain().length()+2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
 	            builder.append(domainSS);
 	            titleView.setText(builder);
 	            
@@ -720,15 +720,14 @@ public final class RedditIsFun extends ListActivity {
     		dismissDialog(Constants.DIALOG_LOADING_THREADS_LIST);
     		if (success) {
 	    		for (ThreadInfo ti : mThreadInfos)
-	        		mThreadsAdapter.add(ti);
+	        		mThreadsList.add(ti);
 	    		// "25 more" button.
-	    		if (mThreadsAdapter.getCount() >= Constants.DEFAULT_THREAD_DOWNLOAD_LIMIT)
-	    			mThreadsAdapter.add(new ThreadInfo());
+	    		if (mThreadsList.size() >= Constants.DEFAULT_THREAD_DOWNLOAD_LIMIT)
+	    			mThreadsList.add(new ThreadInfo());
 	    		// Remember this time for caching purposes
 	    		mLastRefreshTime = System.currentTimeMillis();
 	    		mShouldUseThreadsCache = true;
-	    		mThreadsAdapter.mIsLoading = false;
-	    		mThreadsAdapter.notifyDataSetChanged();
+	    		resetUI(new ThreadsListAdapter(RedditIsFun.this, mThreadsList));
 	    		// Point the list to last thread user was looking at, if any
 	    		jumpToThread();
     		} else {
@@ -1364,6 +1363,8 @@ public final class RedditIsFun extends ListActivity {
     		break;
     		
     	case Constants.DIALOG_LOADING_THREADS_LIST:
+    		// FIXME: if different number of threads in reddit.com settings (e.g., 100) it should display that as max instead,
+    		// since the JSON returns more than just 25 if that is the case.
     		mLoadingThreadsProgress.setMax(mSettings.threadDownloadLimit);
     		break;
     		
@@ -1488,21 +1489,23 @@ public final class RedditIsFun extends ListActivity {
     	
     	@Override
     	public void onPostExecute(Boolean success) {
-    		dismissDialog(Constants.DIALOG_LOADING_THREADS_CACHE);
-    		if (success) {
-    			// Use the cached threads list
-		    	resetUI(new ThreadsListAdapter(RedditIsFun.this, mThreadsList));
-		    	// Set the title based on subreddit
-		    	if (Constants.FRONTPAGE_STRING.equals(mSettings.subreddit))
-		    		setTitle("reddit.com: what's new online!");
-		    	else
-		    		setTitle("/r/"+mSettings.subreddit.toString().trim());
-		    	// Point the list to whichever thread the user was looking at
-		    	jumpToThread();
-    		} else {
-    			//Common.showErrorToast("Reading subreddit cache failed.", Toast.LENGTH_SHORT, RedditIsFun.this);
-    			// Since it didn't read from cache, download normally from Internet.
-    			new DownloadThreadsTask().execute(mSettings.subreddit);
+    		if (!isCancelled()) {
+	    		dismissDialog(Constants.DIALOG_LOADING_THREADS_CACHE);
+	    		if (success) {
+	    			// Use the cached threads list
+			    	resetUI(new ThreadsListAdapter(RedditIsFun.this, mThreadsList));
+			    	// Set the title based on subreddit
+			    	if (Constants.FRONTPAGE_STRING.equals(mSettings.subreddit))
+			    		setTitle("reddit.com: what's new online!");
+			    	else
+			    		setTitle("/r/"+mSettings.subreddit.toString().trim());
+			    	// Point the list to whichever thread the user was looking at
+			    	jumpToThread();
+	    		} else {
+	    			//Common.showErrorToast("Reading subreddit cache failed.", Toast.LENGTH_SHORT, RedditIsFun.this);
+	    			// Since it didn't read from cache, download normally from Internet.
+	    			new DownloadThreadsTask().execute(mSettings.subreddit);
+	    		}
     		}
     	}
     }
