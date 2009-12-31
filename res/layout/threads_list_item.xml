@@ -161,12 +161,13 @@
 		</RelativeLayout>
 	</LinearLayout>
 	
-    <WebView android:id="@+id/selftext"
+    <TextView android:id="@+id/selftext"
     	android:layout_width="fill_parent"
 	    android:layout_height="wrap_content"
 	    android:layout_marginLeft="8dip"
 	    android:layout_marginRight="8dip"
-	    android:scrollbars="none"
+	    android:background="@drawable/selftext_border"
+	    android:textSize="12sp"
 	    android:visibility="gone"
     />
 

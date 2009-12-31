@@ -222,6 +222,8 @@ public class Constants {
     static final String JSON_NEW = "new";
     static final String JSON_NUM_COMMENTS = "num_comments";
 	static final String JSON_REPLIES = "replies";
+	static final String JSON_SELFTEXT = "selftext";
+	static final String JSON_SELFTEXT_HTML = "selftext_html";
 	static final String JSON_SUBJECT = "subject";
     
     // TabSpec tags
@@ -233,6 +235,10 @@ public class Constants {
     static final String PREF_THEME = "theme";
     static final String PREF_THEME_LIGHT = "THEME_LIGHT";
     static final String PREF_THEME_DARK	 = "THEME_DARK";
+    static final String PREF_ROTATION = "rotation";
+    static final String PREF_ROTATION_UNSPECIFIED = "ROTATION_UNSPECIFIED";
+    static final String PREF_ROTATION_PORTRAIT = "ROTATION_PORTRAIT";
+    static final String PREF_ROTATION_LANDSCAPE = "ROTATION_LANDSCAPE";
     static final String PREF_MAIL_NOTIFICATION_STYLE = "mail_notification_style";
     static final String PREF_MAIL_NOTIFICATION_STYLE_DEFAULT = "MAIL_NOTIFICATION_STYLE_DEFAULT";
     static final String PREF_MAIL_NOTIFICATION_STYLE_BIG_ENVELOPE = "MAIL_NOTIFICATION_STYLE_BIG_ENVELOPE";
