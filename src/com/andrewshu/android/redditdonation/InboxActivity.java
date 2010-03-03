@@ -54,6 +54,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.DialogInterface.OnCancelListener;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.SpannableString;
@@ -65,6 +66,8 @@ import android.text.style.URLSpan;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.View.OnClickListener;
@@ -72,6 +75,7 @@ import android.view.View.OnKeyListener;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -87,7 +91,11 @@ public final class InboxActivity extends ListActivity
 
 	private static final String TAG = "InboxActivity";
 	
-    // Group 1: fullname. Group 2: kind. Group 3: id36.
+	// Captcha "iden"
+    private final Pattern CAPTCHA_IDEN_PATTERN = Pattern.compile("name=\"iden\" value=\"(.*?)\"");
+    // Group 2: Captcha image absolute path
+    private final Pattern CAPTCHA_IMAGE_PATTERN = Pattern.compile("<img class=\"capimage\"( alt=\".*?\")? src=\"(.+?)\"");
+	// Group 1: fullname. Group 2: kind. Group 3: id36.
     private final Pattern NEW_ID_PATTERN = Pattern.compile("\"id\": \"((.+?)_(.+?))\"");
     // Group 1: whole error. Group 2: the time part
     private final Pattern RATELIMIT_RETRY_PATTERN = Pattern.compile("(you are trying to submit too fast. try again in (.+?)\\.)");
@@ -113,6 +121,9 @@ public final class InboxActivity extends ListActivity
     
     private String mAfter = null;
     private String mBefore = null;
+    
+    private volatile String mCaptchaIden = null;
+	private volatile String mCaptchaUrl = null;
     
     // ProgressDialogs with percentage bars
 //    private AutoResetProgressDialog mLoadingCommentsProgress;
@@ -599,81 +610,278 @@ public final class InboxActivity extends ListActivity
     	}
     }
     
+    private class MessageComposeTask extends AsyncTask<CharSequence, Void, Boolean> {
+    	Dialog _mDialog;  // needed to update CAPTCHA on failure
+    	MessageInfo _mTargetMessageInfo;
+    	String _mUserError = "Error composing message. Please try again.";
+    	CharSequence _mCaptcha;
+    	
+    	MessageComposeTask(Dialog dialog, MessageInfo targetMessageInfo, CharSequence captcha) {
+    		_mDialog = dialog;
+    		_mTargetMessageInfo = targetMessageInfo;
+    		_mCaptcha = captcha;
+    	}
+    	
+    	@Override
+        public Boolean doInBackground(CharSequence... text) {
+        	String userError = "Error composing message. Please try again.";
+        	HttpEntity entity = null;
+        	
+        	String status = "";
+        	if (!mSettings.loggedIn) {
+        		Common.showErrorToast("You must be logged in to compose a message.", Toast.LENGTH_LONG, InboxActivity.this);
+        		_mUserError = "Not logged in";
+        		return false;
+        	}
+        	// Update the modhash if necessary
+        	if (mSettings.modhash == null) {
+        		CharSequence modhash = Common.doUpdateModhash(mClient);
+        		if (modhash == null) {
+        			// doUpdateModhash should have given an error about credentials
+        			Common.doLogout(mSettings, mClient);
+        			if (Constants.LOGGING) Log.e(TAG, "Message compose failed because doUpdateModhash() failed");
+        			return false;
+        		}
+        		mSettings.setModhash(modhash);
+        	}
+        	
+        	try {
+        		// Construct data
+    			List<NameValuePair> nvps = new ArrayList<NameValuePair>();
+    			nvps.add(new BasicNameValuePair("text", text[0].toString()));
+    			nvps.add(new BasicNameValuePair("subject", _mTargetMessageInfo.getSubject()));
+    			nvps.add(new BasicNameValuePair("to", _mTargetMessageInfo.getDest()));
+    			nvps.add(new BasicNameValuePair("uh", mSettings.modhash.toString()));
+    			nvps.add(new BasicNameValuePair("thing_id", ""));
+    			if (mCaptchaIden != null) {
+    				nvps.add(new BasicNameValuePair("iden", mCaptchaIden));
+    				nvps.add(new BasicNameValuePair("captcha", _mCaptcha.toString()));
+    			}
+    			
+    			HttpPost httppost = new HttpPost("http://www.reddit.com/api/compose");
+    	        httppost.setEntity(new UrlEncodedFormEntity(nvps, HTTP.UTF_8));
+    	        
+    	        if (Constants.LOGGING) Log.d(TAG, nvps.toString());
+    	        
+                // Perform the HTTP POST request
+    	    	HttpResponse response = mClient.execute(httppost);
+    	    	status = response.getStatusLine().toString();
+            	if (!status.contains("OK"))
+            		throw new HttpException(status);
+            	
+            	entity = response.getEntity();
+
+            	BufferedReader in = new BufferedReader(new InputStreamReader(entity.getContent()));
+            	String line = in.readLine();
+            	in.close();
+            	if (line == null || Constants.EMPTY_STRING.equals(line)) {
+            		throw new HttpException("No content returned from compose POST");
+            	}
+            	if (line.contains("WRONG_PASSWORD")) {
+            		throw new Exception("Wrong password");
+            	}
+            	if (line.contains("USER_REQUIRED")) {
+            		// The modhash probably expired
+            		mSettings.setModhash(null);
+            		throw new Exception("User required. Huh?");
+            	}
+            	
+            	if (Constants.LOGGING) Common.logDLong(TAG, line);
+
+            	Matcher idMatcher = NEW_ID_PATTERN.matcher(line);
+            	if (idMatcher.find()) {
+            		// Don't need id since reply isn't posted to inbox
+//            		newFullname = idMatcher.group(1);
+//            		newId = idMatcher.group(3);
+            	} else {
+            		if (line.contains("RATELIMIT")) {
+                		// Try to find the # of minutes using regex
+                    	Matcher rateMatcher = RATELIMIT_RETRY_PATTERN.matcher(line);
+                    	if (rateMatcher.find())
+                    		userError = rateMatcher.group(1);
+                    	else
+                    		userError = "you are trying to submit too fast. try again in a few minutes.";
+                		throw new Exception(userError);
+                	}
+            		if (line.contains("BAD_CAPTCHA")) {
+            			_mUserError = "Bad CAPTCHA. Try again.";
+            			new DownloadCaptchaTask(_mDialog).execute();
+            		}
+            	}
+            	
+            	entity.consumeContent();
+            	
+            	return true;
+            	
+        	} catch (Exception e) {
+        		if (entity != null) {
+        			try {
+        				entity.consumeContent();
+        			} catch (IOException e2) {
+        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        			}
+        		}
+        		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        	}
+        	return false;
+        }
+    	
+    	@Override
+    	public void onPreExecute() {
+    		showDialog(Constants.DIALOG_COMPOSING);
+    	}
+    	
+    	@Override
+    	public void onPostExecute(Boolean success) {
+    		dismissDialog(Constants.DIALOG_COMPOSING);
+    		if (success) {
+    			_mTargetMessageInfo.setReplyDraft("");
+    			Toast.makeText(InboxActivity.this, "Message sent.", Toast.LENGTH_SHORT).show();
+    			// TODO: add the reply beneath the original, OR redirect to sent messages page
+    		} else {
+    			Common.showErrorToast(_mUserError, Toast.LENGTH_LONG, InboxActivity.this);
+    		}
+    	}
+    }
+    
+    private class CheckCaptchaRequiredTask extends AsyncTask<Void, Void, Boolean> {
+    	private Dialog _mDialog;
+    	public CheckCaptchaRequiredTask(Dialog dialog) {
+    		_mDialog = dialog;
+    	}
+    	
+		@Override
+		public Boolean doInBackground(Void... voidz) {
+			HttpEntity entity = null;
+			try {
+				HttpGet request = new HttpGet("http://www.reddit.com/message/compose/");
+				HttpResponse response = mClient.execute(request);
+				entity = response.getEntity(); 
+	    		BufferedReader in = new BufferedReader(new InputStreamReader(entity.getContent()));
+            	String line = in.readLine();
+            	in.close();
+
+            	Matcher idenMatcher = CAPTCHA_IDEN_PATTERN.matcher(line);
+            	Matcher urlMatcher = CAPTCHA_IMAGE_PATTERN.matcher(line);
+            	if (idenMatcher.find() && urlMatcher.find()) {
+            		mCaptchaIden = idenMatcher.group(1);
+            		mCaptchaUrl = urlMatcher.group(2);
+            		entity.consumeContent();
+            		return true;
+            	} else {
+            		mCaptchaIden = null;
+            		mCaptchaUrl = null;
+            		entity.consumeContent();
+            		return false;
+            	}
+			} catch (Exception e) {
+				if (entity != null) {
+					try {
+						entity.consumeContent();
+					} catch (Exception e2) {
+						if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+					}
+				}
+				if (Constants.LOGGING) Log.e(TAG, "Error accessing http://www.reddit.com/message/compose/ to check for CAPTCHA");
+			}
+			return null;
+		}
+		
+		@Override
+		public void onPreExecute() {
+			// Hide send button so user can't send until we know whether he needs captcha
+			final Button sendButton = (Button) _mDialog.findViewById(R.id.compose_send_button);
+			sendButton.setVisibility(View.INVISIBLE);
+			// Show "loading captcha" label
+			final TextView loadingCaptcha = (TextView) _mDialog.findViewById(R.id.compose_captcha_loading);
+			loadingCaptcha.setVisibility(View.VISIBLE);
+		}
+		
+		@Override
+		public void onPostExecute(Boolean required) {
+			final TextView captchaLabel = (TextView) _mDialog.findViewById(R.id.compose_captcha_textview);
+			final ImageView captchaImage = (ImageView) _mDialog.findViewById(R.id.compose_captcha_image);
+			final EditText captchaEdit = (EditText) _mDialog.findViewById(R.id.compose_captcha_input);
+			final TextView loadingCaptcha = (TextView) _mDialog.findViewById(R.id.compose_captcha_loading);
+			final Button sendButton = (Button) _mDialog.findViewById(R.id.compose_send_button);
+			if (required == null) {
+				Common.showErrorToast("Error retrieving captcha. Use the menu to try again.", Toast.LENGTH_LONG, InboxActivity.this);
+				return;
+			}
+			if (required) {
+				captchaLabel.setVisibility(View.VISIBLE);
+				captchaImage.setVisibility(View.VISIBLE);
+				captchaEdit.setVisibility(View.VISIBLE);
+				// Launch a task to download captcha and display it
+				new DownloadCaptchaTask(_mDialog).execute();
+			} else {
+				captchaLabel.setVisibility(View.GONE);
+				captchaImage.setVisibility(View.GONE);
+				captchaEdit.setVisibility(View.GONE);
+			}
+			loadingCaptcha.setVisibility(View.GONE);
+			sendButton.setVisibility(View.VISIBLE);
+		}
+	}
+	
+    private class DownloadCaptchaTask extends AsyncTask<Void, Void, Drawable> {
+    	private Dialog _mDialog;
+    	public DownloadCaptchaTask(Dialog dialog) {
+    		_mDialog = dialog;
+    	}
+		@Override
+		public Drawable doInBackground(Void... voidz) {
+			try {
+				HttpGet request = new HttpGet("http://www.reddit.com/" + mCaptchaUrl);
+				HttpResponse response = mClient.execute(request);
+	    	
+				InputStream in = response.getEntity().getContent();
+				
+				return Drawable.createFromStream(in, "captcha");
+			
+			} catch (Exception e) {
+				Common.showErrorToast("Error downloading captcha.", Toast.LENGTH_LONG, InboxActivity.this);
+			}
+			
+			return null;
+		}
+		
+		@Override
+		public void onPostExecute(Drawable captcha) {
+			if (captcha == null) {
+				Common.showErrorToast("Error retrieving captcha. Use the menu to try again.", Toast.LENGTH_LONG, InboxActivity.this);
+				return;
+			}
+			final ImageView composeCaptchaView = (ImageView) _mDialog.findViewById(R.id.compose_captcha_image);
+			composeCaptchaView.setVisibility(View.VISIBLE);
+			composeCaptchaView.setImageDrawable(captcha);
+		}
+	}
+    
         
     
-    // TODO: Options menu
-//    /**
-//     * Populates the menu.
-//     */
-//    @Override
-//    public boolean onCreateOptionsMenu(Menu menu) {
-//        super.onCreateOptionsMenu(menu);
-//        
-//        menu.add(0, Constants.DIALOG_OP, 0, "OP")
-//        	.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_OP));
-//        
-//        // Login and Logout need to use the same ID for menu entry so they can be swapped
-//        if (mSettings.loggedIn) {
-//        	menu.add(0, Constants.DIALOG_LOGIN, 1, "Logout: " + mSettings.username)
-//       			.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_LOGOUT));
-//        } else {
-//        	menu.add(0, Constants.DIALOG_LOGIN, 1, "Login")
-//       			.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_LOGIN));
-//        }
-//        
-//        menu.add(0, Constants.DIALOG_REFRESH, 2, "Refresh")
-//        	.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_REFRESH));
-//        
-//        menu.add(0, Constants.DIALOG_REPLY, 3, "Reply to thread")
-//    		.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_REPLY));
-//        
-//        if (mSettings.theme == R.style.Reddit_Light) {
-//        	menu.add(0, Constants.DIALOG_THEME, 4, "Dark")
-////        		.setIcon(R.drawable.dark_circle_menu_icon)
-//        		.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_THEME));
-//        } else {
-//        	menu.add(0, Constants.DIALOG_THEME, 4, "Light")
-////	    		.setIcon(R.drawable.light_circle_menu_icon)
-//	    		.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_THEME));
-//        }
-//        
-//        menu.add(0, Constants.DIALOG_OPEN_BROWSER, 5, "Open in browser")
-//    		.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_OPEN_BROWSER));
-//        
-//        return true;
-//    }
-//    
-//    @Override
-//    public boolean onPrepareOptionsMenu(Menu menu) {
-//    	super.onPrepareOptionsMenu(menu);
-//    	
-//    	// Login/Logout
-//    	if (mSettings.loggedIn) {
-//	        menu.findItem(Constants.DIALOG_LOGIN).setTitle("Logout: " + mSettings.username)
-//	        	.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_LOGOUT));
-//    	} else {
-//            menu.findItem(Constants.DIALOG_LOGIN).setTitle("Login")
-//            	.setOnMenuItemClickListener(new CommentsListMenu(Constants.DIALOG_LOGIN));
-//    	}
-//    	
-//    	// Theme: Light/Dark
-//    	if (mSettings.theme == R.style.Reddit_Light) {
-//    		menu.findItem(Constants.DIALOG_THEME).setTitle("Dark");
-////    			.setIcon(R.drawable.dark_circle_menu_icon);
-//    	} else {
-//    		menu.findItem(Constants.DIALOG_THEME).setTitle("Light");
-////    			.setIcon(R.drawable.light_circle_menu_icon);
-//    	}
-//        
-//        return true;
-//    }
-//
-//    @Override
-//    public boolean onOptionsItemSelected(MenuItem item) {
-//    	
-//    	
-//    	return true;
-//    }
+
+    /**
+     * Populates the menu.
+     */
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        super.onCreateOptionsMenu(menu);
+        
+        menu.add(0, Constants.DIALOG_COMPOSE, 0, "Compose Message");
+        
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+    	
+    	if(item.getItemId() == Constants.DIALOG_COMPOSE) {
+			showDialog(Constants.DIALOG_COMPOSE);
+    	}
+    	
+    	return true;
+    }
 //
 //    private class CommentsListMenu implements MenuItem.OnMenuItemClickListener {
 //        private int mAction;
@@ -734,6 +942,7 @@ public final class InboxActivity extends ListActivity
     	ProgressDialog pdialog;
     	AlertDialog.Builder builder;
     	LayoutInflater inflater;
+    	View layout; // used for inflated views for AlertDialog.Builder.setView()
     	
     	switch (id) {
     	case Constants.DIALOG_LOGIN:
@@ -844,6 +1053,53 @@ public final class InboxActivity extends ListActivity
     			}
     		});
     		break;
+    	case Constants.DIALOG_COMPOSE:
+    		inflater = (LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+    		builder = new AlertDialog.Builder(this);
+    		layout = inflater.inflate(R.layout.compose_dialog, null);
+    		dialog = builder.setView(layout).create();
+    		final Dialog composeDialog = dialog;
+    		final EditText composeDestination = (EditText) layout.findViewById(R.id.compose_destination_input);
+    		final EditText composeSubject = (EditText) layout.findViewById(R.id.compose_subject_input);
+    		final EditText composeText = (EditText) layout.findViewById(R.id.compose_text_input);
+    		final Button composeSendButton = (Button) layout.findViewById(R.id.compose_send_button);
+    		final Button composeCancelButton = (Button) layout.findViewById(R.id.compose_cancel_button);
+    		final EditText composeCaptcha = (EditText) layout.findViewById(R.id.compose_captcha_input);
+    		composeSendButton.setOnClickListener(new OnClickListener() {
+				@Override
+				public void onClick(View v) {
+		    		MessageInfo hi = new MessageInfo();
+		    		// reddit.com performs these sanity checks too.
+		    		if ("".equals(composeDestination.getText().toString().trim())) {
+		    			Toast.makeText(InboxActivity.this, "please enter a username", Toast.LENGTH_LONG).show();
+		    			return;
+		    		}
+		    		if ("".equals(composeSubject.getText().toString().trim())) {
+		    			Toast.makeText(InboxActivity.this, "please enter a subject", Toast.LENGTH_LONG).show();
+		    			return;
+		    		}
+		    		if ("".equals(composeText.getText().toString().trim())) {
+		    			Toast.makeText(InboxActivity.this, "you need to enter a message", Toast.LENGTH_LONG).show();
+		    			return;
+		    		}
+		    		if (composeCaptcha.getVisibility() == View.VISIBLE && "".equals(composeCaptcha.getText().toString().trim())) {
+		    			Toast.makeText(InboxActivity.this, "", Toast.LENGTH_LONG).show();
+		    			return;
+		    		}
+		    		hi.put(MessageInfo.DEST, composeDestination.getText().toString().trim());
+		    		hi.put(MessageInfo.SUBJECT, composeSubject.getText().toString().trim());
+		    		new MessageComposeTask(composeDialog, hi, composeCaptcha.getText().toString().trim())
+		    			.execute(composeText.getText().toString().trim());
+		    		dismissDialog(Constants.DIALOG_COMPOSE);
+				}
+    		});
+    		composeCancelButton.setOnClickListener(new OnClickListener() {
+				@Override
+				public void onClick(View v) {
+					dismissDialog(Constants.DIALOG_COMPOSE);
+				}
+    		});
+    		break;
     		
    		// "Please wait"
     	case Constants.DIALOG_LOGGING_IN:
@@ -866,8 +1122,15 @@ public final class InboxActivity extends ListActivity
     		pdialog.setIndeterminate(true);
     		pdialog.setCancelable(false);
     		dialog = pdialog;
+    		break;   		
+    	case Constants.DIALOG_COMPOSING:
+    		pdialog = new ProgressDialog(this);
+    		pdialog.setMessage("Composing message...");
+    		pdialog.setIndeterminate(true);
+    		pdialog.setCancelable(false);
+    		dialog = pdialog;
     		break;
-    	
+    		
     	default:
     		throw new IllegalArgumentException("Unexpected dialog id "+id);
     	}
@@ -893,6 +1156,10 @@ public final class InboxActivity extends ListActivity
     			EditText replyBodyView = (EditText) dialog.findViewById(R.id.body); 
     			replyBodyView.setText(mVoteTargetMessageInfo.getReplyDraft());
     		}
+    		break;
+    		
+    	case Constants.DIALOG_COMPOSE:
+    		new CheckCaptchaRequiredTask(dialog).execute();
     		break;
     		
 //    	case Constants.DIALOG_LOADING_INBOX:
