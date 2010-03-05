@@ -783,10 +783,17 @@ public class CommentsListActivity extends ListActivity
 			if (JsonToken.START_OBJECT != jp.getCurrentToken())
 				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
-			while (!Constants.JSON_CHILDREN.equals(jp.getCurrentName())) {
-				// Don't care
-				jp.nextToken();
-			}
+			// Save the modhash
+			if (!Constants.JSON_MODHASH.equals(jp.getCurrentName()))
+				throw new IllegalStateException(genericListingError);
+			jp.nextToken();
+			if (Constants.EMPTY_STRING.equals(jp.getText()))
+				mSettings.setModhash(null);
+			else
+				mSettings.setModhash(jp.getText());
+			jp.nextToken();
+			if (!Constants.JSON_CHILDREN.equals(jp.getCurrentName()))
+				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
 			if (jp.getCurrentToken() != JsonToken.START_ARRAY)
 				throw new IllegalStateException(genericListingError);
@@ -931,10 +938,17 @@ public class CommentsListActivity extends ListActivity
 		    	if (jp.nextToken() != JsonToken.START_OBJECT)
 		    		throw new IllegalStateException(genericListingError);
 		    	jp.nextToken();
-		    	while (!Constants.JSON_CHILDREN.equals(jp.getCurrentName())) {
-		    		// Don't care about "after"
-		    		jp.nextToken();
-		    	}
+				// Save the modhash
+				if (!Constants.JSON_MODHASH.equals(jp.getCurrentName()))
+					throw new IllegalStateException(genericListingError);
+				jp.nextToken();
+				if (Constants.EMPTY_STRING.equals(jp.getText()))
+					mSettings.setModhash(null);
+				else
+					mSettings.setModhash(jp.getText());
+				jp.nextToken();
+		    	if (!Constants.JSON_CHILDREN.equals(jp.getCurrentName()))
+		    		throw new IllegalStateException(genericListingError);
 		    	jp.nextToken();
 		    	if (jp.getCurrentToken() != JsonToken.START_ARRAY)
 		    		throw new IllegalStateException(genericListingError);
@@ -1210,6 +1224,10 @@ public class CommentsListActivity extends ListActivity
                     		_mUserError = "you are trying to submit too fast. try again in a few minutes.";
                 		throw new Exception(_mUserError);
                 	}
+            		if (line.contains("DELETED_LINK")) {
+            			_mUserError = "the link you are commenting on has been deleted";
+            			throw new Exception(_mUserError);
+            		}
                 	throw new Exception("No id returned by reply POST.");
             	}
             	
@@ -1223,7 +1241,7 @@ public class CommentsListActivity extends ListActivity
         			try {
         				entity.consumeContent();
         			} catch (Exception e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
         		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
@@ -1334,6 +1352,10 @@ public class CommentsListActivity extends ListActivity
                     		_mUserError = "you are trying to submit too fast. try again in a few minutes.";
                 		throw new Exception(_mUserError);
                 	}
+            		if (line.contains("DELETED_LINK")) {
+            			_mUserError = "the link you are commenting on has been deleted";
+            			throw new Exception(_mUserError);
+            		}
                 	throw new Exception("No id returned by reply POST.");
             	}
             	
@@ -1347,7 +1369,7 @@ public class CommentsListActivity extends ListActivity
         			try {
         				entity.consumeContent();
         			} catch (Exception e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
         		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
@@ -1454,7 +1476,7 @@ public class CommentsListActivity extends ListActivity
         			try {
         				entity.consumeContent();
         			} catch (Exception e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
         		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
@@ -1579,7 +1601,7 @@ public class CommentsListActivity extends ListActivity
         			try {
         				entity.consumeContent();
         			} catch (Exception e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
         		if (Constants.LOGGING) Log.e(TAG, e.getMessage());

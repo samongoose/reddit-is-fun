@@ -611,13 +611,14 @@ public final class RedditIsFun extends ListActivity {
 			if (JsonToken.START_OBJECT != jp.getCurrentToken())
 				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
-			// Save the "after"
-			if (!Constants.JSON_AFTER.equals(jp.getCurrentName()))
+			// Save the modhash
+			if (!Constants.JSON_MODHASH.equals(jp.getCurrentName()))
 				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
-			mAfter = jp.getText();
-			if (Constants.NULL_STRING.equals(mAfter))
-				mAfter = null;
+			if (Constants.EMPTY_STRING.equals(jp.getText()))
+				mSettings.setModhash(null);
+			else
+				mSettings.setModhash(jp.getText());
 			jp.nextToken();
 			if (!Constants.JSON_CHILDREN.equals(jp.getCurrentName()))
 				throw new IllegalStateException(genericListingError);
@@ -682,6 +683,14 @@ public final class RedditIsFun extends ListActivity {
 				mThreadInfos.add(ti);
 				publishProgress(progressIndex++);
 			}
+			// Get the "after"
+			jp.nextToken();
+			if (!Constants.JSON_AFTER.equals(jp.getCurrentName()))
+				throw new IllegalStateException(genericListingError);
+			jp.nextToken();
+			mAfter = jp.getText();
+			if (Constants.NULL_STRING.equals(mAfter))
+				mAfter = null;
 			// Get the "before"
 			jp.nextToken();
 			if (!Constants.JSON_BEFORE.equals(jp.getCurrentName()))
@@ -692,6 +701,7 @@ public final class RedditIsFun extends ListActivity {
 				mBefore = null;
     	}
     	
+    	@Override
     	public void onPreExecute() {
     		synchronized (mCurrentDownloadThreadsTaskLock) {
 	    		if (mCurrentDownloadThreadsTask != null)
@@ -876,7 +886,7 @@ public final class RedditIsFun extends ListActivity {
         			try {
         				entity.consumeContent();
         			} catch (Exception e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
         		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
@@ -1349,12 +1359,11 @@ public final class RedditIsFun extends ListActivity {
     			});
     		}
 
-    		// The "link" and "comments" buttons
-    		commentsButton.setOnClickListener(commentsOnClickListener);
+    		// "link" button behaves differently for regular links vs. self posts and links to comments pages (e.g., bestof)
     		// TODO: Handle bestof posts, which aren't self posts
             if (("self.").toLowerCase().equals(mVoteTargetThreadInfo.getDomain().substring(0, 5).toLowerCase())) {
             	// It's a self post. Both buttons do the same thing.
-            	linkButton.setOnClickListener(commentsOnClickListener);
+            	linkButton.setEnabled(false);
             } else {
             	final String url = mVoteTargetThreadInfo.getURL();
             	linkButton.setOnClickListener(new OnClickListener() {
@@ -1364,7 +1373,23 @@ public final class RedditIsFun extends ListActivity {
     					Common.launchBrowser(url, RedditIsFun.this);
     				}
     			});
+            	linkButton.setEnabled(true);
             }
+            
+            // "comments" button is easy: always does the same thing
+            commentsButton.setOnClickListener(new OnClickListener() {
+    			public void onClick(View v) {
+    				dismissDialog(Constants.DIALOG_THING_CLICK);
+    				// Launch an Intent for CommentsListActivity
+    				Intent i = new Intent(getApplicationContext(), CommentsListActivity.class);
+    				i.putExtra(ThreadInfo.SUBREDDIT, mVoteTargetThreadInfo.getSubreddit());
+    				i.putExtra(ThreadInfo.ID, mVoteTargetThreadInfo.getId());
+    				i.putExtra(ThreadInfo.TITLE, mVoteTargetThreadInfo.getTitle());
+    				i.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mVoteTargetThreadInfo.getNumComments()));
+    				startActivity(i);
+    			}
+    		});
+    		
     		break;
     		
     	case Constants.DIALOG_LOADING_THREADS_LIST:
@@ -1409,20 +1434,7 @@ public final class RedditIsFun extends ListActivity {
 			}
 		}
     };
-    private final OnClickListener commentsOnClickListener = new OnClickListener() {
-		public void onClick(View v) {
-			dismissDialog(Constants.DIALOG_THING_CLICK);
-			// Launch an Intent for CommentsListActivity
-			Intent i = new Intent(getApplicationContext(), CommentsListActivity.class);
-			i.putExtra(ThreadInfo.SUBREDDIT, mVoteTargetThreadInfo.getSubreddit());
-			i.putExtra(ThreadInfo.ID, mVoteTargetThreadInfo.getId());
-			i.putExtra(ThreadInfo.TITLE, mVoteTargetThreadInfo.getTitle());
-			i.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mVoteTargetThreadInfo.getNumComments()));
-			startActivity(i);
-		}
-	};
-
-	
+    
 	
     private class ReadCacheTask extends AsyncTask<Void, Void, Boolean> {
     	@Override

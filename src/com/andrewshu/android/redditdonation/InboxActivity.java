@@ -92,10 +92,10 @@ public final class InboxActivity extends ListActivity
 	private static final String TAG = "InboxActivity";
 	
 	// Captcha "iden"
-    private final Pattern CAPTCHA_IDEN_PATTERN = Pattern.compile("name=\"iden\" value=\"(.*?)\"");
+    private final Pattern CAPTCHA_IDEN_PATTERN = Pattern.compile("name=\"iden\" value=\"([^\"]+?)\"");
     // Group 2: Captcha image absolute path
-    private final Pattern CAPTCHA_IMAGE_PATTERN = Pattern.compile("<img class=\"capimage\"( alt=\".*?\")? src=\"(.+?)\"");
-	// Group 1: fullname. Group 2: kind. Group 3: id36.
+    private final Pattern CAPTCHA_IMAGE_PATTERN = Pattern.compile("<img class=\"capimage\"( alt=\".*?\")? src=\"(/captcha/[^\"]+?)\"");
+    	// Group 1: fullname. Group 2: kind. Group 3: id36.
     private final Pattern NEW_ID_PATTERN = Pattern.compile("\"id\": \"((.+?)_(.+?))\"");
     // Group 1: whole error. Group 2: the time part
     private final Pattern RATELIMIT_RETRY_PATTERN = Pattern.compile("(you are trying to submit too fast. try again in (.+?)\\.)");
@@ -365,13 +365,14 @@ public final class InboxActivity extends ListActivity
 			if (JsonToken.START_OBJECT != jp.getCurrentToken())
 				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
-			// Save the "after"
-			if (!Constants.JSON_AFTER.equals(jp.getCurrentName()))
+			// Save the modhash
+			if (!Constants.JSON_MODHASH.equals(jp.getCurrentName()))
 				throw new IllegalStateException(genericListingError);
 			jp.nextToken();
-			mAfter = jp.getText();
-			if (Constants.NULL_STRING.equals(mAfter))
-				mAfter = null;
+			if (Constants.EMPTY_STRING.equals(jp.getText()))
+				mSettings.setModhash(null);
+			else
+				mSettings.setModhash(jp.getText());
 			jp.nextToken();
 			if (!Constants.JSON_CHILDREN.equals(jp.getCurrentName()))
 				throw new IllegalStateException(genericListingError);
@@ -412,6 +413,14 @@ public final class InboxActivity extends ListActivity
 				mMessageInfos.add(mi);
 //				publishProgress(progressIndex++);
 			}
+			// Get the "after"
+			jp.nextToken();
+			if (!Constants.JSON_AFTER.equals(jp.getCurrentName()))
+				throw new IllegalStateException(genericListingError);
+			jp.nextToken();
+			mAfter = jp.getText();
+			if (Constants.NULL_STRING.equals(mAfter))
+				mAfter = null;
 			// Get the "before"
 			jp.nextToken();
 			if (!Constants.JSON_BEFORE.equals(jp.getCurrentName()))
@@ -572,22 +581,25 @@ public final class InboxActivity extends ListActivity
                     		userError = "you are trying to submit too fast. try again in a few minutes.";
                 		throw new Exception(userError);
                 	}
+            		if (line.contains("DELETED_LINK")) {
+            			_mUserError = "the link you are commenting on has been deleted";
+            			throw new Exception(_mUserError);
+            		}
                 	throw new Exception("No id returned by reply POST.");
             	}
-            	
-            	entity.consumeContent();
             	
             	return true;
             	
         	} catch (Exception e) {
+        		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        	} finally {
         		if (entity != null) {
         			try {
         				entity.consumeContent();
         			} catch (IOException e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
-        		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
         	}
         	return false;
         }
@@ -706,22 +718,22 @@ public final class InboxActivity extends ListActivity
             		if (line.contains("BAD_CAPTCHA")) {
             			_mUserError = "Bad CAPTCHA. Try again.";
             			new DownloadCaptchaTask(_mDialog).execute();
+            			return false;
             		}
             	}
-            	
-            	entity.consumeContent();
             	
             	return true;
             	
         	} catch (Exception e) {
+        		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        	} finally {
         		if (entity != null) {
         			try {
         				entity.consumeContent();
         			} catch (IOException e2) {
-        				if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+        				if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
         			}
         		}
-        		if (Constants.LOGGING) Log.e(TAG, e.getMessage());
         	}
         	return false;
         }
@@ -779,7 +791,7 @@ public final class InboxActivity extends ListActivity
 					try {
 						entity.consumeContent();
 					} catch (Exception e2) {
-						if (Constants.LOGGING) Log.e(TAG, e.getMessage());
+						if (Constants.LOGGING) Log.e(TAG, e2.getMessage());
 					}
 				}
 				if (Constants.LOGGING) Log.e(TAG, "Error accessing http://www.reddit.com/message/compose/ to check for CAPTCHA");
