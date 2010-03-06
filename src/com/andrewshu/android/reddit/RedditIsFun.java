@@ -73,6 +73,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.View.OnClickListener;
 import android.view.View.OnKeyListener;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -149,6 +150,13 @@ public final class RedditIsFun extends ListActivity {
         // The above layout contains a list id "android:list"
         // which ListActivity adopts as its list -- we can
         // access it with getListView().
+        ListView lv = getListView();
+        lv.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+        	@Override
+        	public boolean onItemLongClick(AdapterView<?> av, View v, int pos, long id) {
+        	   onLongListItemClick(v,pos,id);
+        	   return true; 
+        	}});
 
         if (savedInstanceState != null) {
 	        CharSequence subreddit = savedInstanceState.getCharSequence(ThreadInfo.SUBREDDIT);
@@ -476,13 +484,46 @@ public final class RedditIsFun extends ListActivity {
         // if mThreadsAdapter.getCount() - 1 contains the "next 25, prev 25" buttons,
         // or if there are fewer than 25 threads...
         if (position < mThreadsAdapter.getCount() - 1 || mThreadsAdapter.getCount() < Constants.DEFAULT_THREAD_DOWNLOAD_LIMIT + 1) {
+            if (mSettings.onClickAction.equals(Constants.PREF_ON_CLICK_OPEN_LINK))
+        	{
+                // Mark the thread as selected
+                mVoteTargetThreadInfo = item;
+                mJumpToThreadId = item.getId();
+                //showDialog(Constants.DIALOG_THING_CLICK);
+                if (!mVoteTargetThreadInfo.isSelfPost()) {
+                    Common.launchBrowser(item.getURL(), RedditIsFun.this);
+                }
+                else {
+                    Intent i = new Intent(getApplicationContext(), CommentsListActivity.class);
+                    i.putExtra(ThreadInfo.SUBREDDIT, mVoteTargetThreadInfo.getSubreddit());
+                    i.putExtra(ThreadInfo.ID, mVoteTargetThreadInfo.getId());
+                    i.putExtra(ThreadInfo.TITLE, mVoteTargetThreadInfo.getTitle());
+                    i.putExtra(ThreadInfo.NUM_COMMENTS, Integer.valueOf(mVoteTargetThreadInfo.getNumComments()));
+                    startActivity(i);
+                }
+            } else
+            {
+                onLongListItemClick(v, position, id);
+            }
+        } else {
+        	// 25 more. Use buttons.
+        }
+    }
+
+    protected void onLongListItemClick(View v, int position, long id)
+    {
+    	ThreadInfo item = mThreadsAdapter.getItem(position);
+    
+	    // if mThreadsAdapter.getCount() - 1 contains the "next 25, prev 25" buttons,
+	    // or if there are fewer than 25 threads...
+	    if (position < mThreadsAdapter.getCount() - 1 || mThreadsAdapter.getCount() < Constants.DEFAULT_THREAD_DOWNLOAD_LIMIT + 1) {
 	        // Mark the thread as selected
 	        mVoteTargetThreadInfo = item;
 	        mJumpToThreadId = item.getId();
 	        showDialog(Constants.DIALOG_THING_CLICK);
-        } else {
-        	// 25 more. Use buttons.
-        }
+	    } else {
+	    	// 25 more. Use buttons.
+	    }
     }
 
     /**
@@ -1360,8 +1401,7 @@ public final class RedditIsFun extends ListActivity {
     		}
 
     		// "link" button behaves differently for regular links vs. self posts and links to comments pages (e.g., bestof)
-    		// TODO: Handle bestof posts, which aren't self posts
-            if (("self.").toLowerCase().equals(mVoteTargetThreadInfo.getDomain().substring(0, 5).toLowerCase())) {
+            if (mVoteTargetThreadInfo.isSelfPost()) {
             	// It's a self post. Both buttons do the same thing.
             	linkButton.setEnabled(false);
             } else {

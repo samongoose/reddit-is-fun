@@ -170,6 +170,11 @@ public class ThreadInfo implements Serializable {
 	public String getURL() {
 		return mValues.get(URL);
 	}
-	
+
+    public boolean isSelfPost()
+    {
+        // TODO: Handle bestof posts, which aren't self posts
+        return (("self.").toLowerCase().equals(getDomain().substring(0, 5).toLowerCase()));
+    }
 	
 }
